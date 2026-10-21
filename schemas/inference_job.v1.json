@@ -1,0 +1,430 @@
+{
+  "$defs": {
+    "ChatMessage": {
+      "additionalProperties": false,
+      "description": "One chat turn in a structured prompt.",
+      "properties": {
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "role": {
+          "default": "user",
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "ChatMessage",
+      "type": "object"
+    },
+    "ExecutionPhase": {
+      "description": "Phase of a (possibly split) execution.\n\nPD-DAG disaggregation runs the prefill phase on a compute-bound node and\nthe decode phase on a memory-bandwidth-bound node.",
+      "enum": [
+        "prefill",
+        "decode",
+        "monolithic"
+      ],
+      "title": "ExecutionPhase",
+      "type": "string"
+    },
+    "InferencePayload": {
+      "additionalProperties": false,
+      "description": "The inference request itself, decoupled from scheduling concerns.",
+      "properties": {
+        "expected_output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Declared generation size; drives PD-DAG routing.",
+          "title": "Expected Output Tokens"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "title": "Messages",
+          "type": "array"
+        },
+        "model": {
+          "description": "Model identifier understood by the target engine.",
+          "title": "Model",
+          "type": "string"
+        },
+        "parameters": {
+          "$ref": "#/$defs/SamplingParams"
+        },
+        "prompt": {
+          "default": "",
+          "title": "Prompt",
+          "type": "string"
+        },
+        "prompt_tokens_hint": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Declared prompt size; avoids guessing when the caller knows.",
+          "title": "Prompt Tokens Hint"
+        },
+        "system": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System"
+        }
+      },
+      "required": [
+        "model"
+      ],
+      "title": "InferencePayload",
+      "type": "object"
+    },
+    "JobState": {
+      "description": "Lifecycle of an :class:`InferenceJob`.",
+      "enum": [
+        "queued",
+        "windowing",
+        "dispatched",
+        "running",
+        "completed",
+        "failed",
+        "recovering",
+        "cancelled"
+      ],
+      "title": "JobState",
+      "type": "string"
+    },
+    "PriorityTier": {
+      "description": "Scheduling tier of a request.",
+      "enum": [
+        "interactive",
+        "flex"
+      ],
+      "title": "PriorityTier",
+      "type": "string"
+    },
+    "ResumePoint": {
+      "additionalProperties": false,
+      "description": "Exact resumption coordinates for an interrupted generation.\n\n``decode_step`` is the authoritative position in the decode loop. The\n``kv_cache_ref`` points at the KV-cache blob persisted in EdgeRecord; it is\nthe same identifier surfaced as ``InferenceJob.kv_cache_state_id``.",
+      "properties": {
+        "checksum_algorithm": {
+          "default": "sha256",
+          "title": "Checksum Algorithm",
+          "type": "string"
+        },
+        "decode_step": {
+          "description": "Decode iterations completed before the fault.",
+          "minimum": 0,
+          "title": "Decode Step",
+          "type": "integer"
+        },
+        "generated_token_count": {
+          "description": "Tokens emitted before the fault.",
+          "minimum": 0,
+          "title": "Generated Token Count",
+          "type": "integer"
+        },
+        "kv_cache_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "EdgeRecord document id of the KV cache.",
+          "title": "Kv Cache Ref"
+        },
+        "kv_cache_state_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Alias of kv_cache_ref.",
+          "title": "Kv Cache State Id"
+        },
+        "model": {
+          "default": "",
+          "description": "Model that produced the state.",
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_hash": {
+          "description": "sha256 of the canonical prompt, guards against payload drift.",
+          "title": "Prompt Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decode_step",
+        "generated_token_count",
+        "prompt_hash"
+      ],
+      "title": "ResumePoint",
+      "type": "object"
+    },
+    "SamplingParams": {
+      "additionalProperties": false,
+      "description": "Sampler configuration forwarded to the inference engine.",
+      "properties": {
+        "num_predict": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Hard cap on generated tokens.",
+          "title": "Num Predict"
+        },
+        "repeat_penalty": {
+          "default": 1.1,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Repeat Penalty",
+          "type": "number"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "stop": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop",
+          "type": "array"
+        },
+        "temperature": {
+          "default": 0.8,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Temperature",
+          "type": "number"
+        },
+        "top_k": {
+          "default": 40,
+          "minimum": 0,
+          "title": "Top K",
+          "type": "integer"
+        },
+        "top_p": {
+          "default": 0.95,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Top P",
+          "type": "number"
+        }
+      },
+      "title": "SamplingParams",
+      "type": "object"
+    }
+  },
+  "$id": "https://hamanaka.local/horizon-broker/inference_job.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A unit of inference work tracked by The Horizon Broker.\n\nThe four fields that define the scheduling contract are ``priority_tier``,\n``payload``, ``max_acceptable_latency_ms`` and ``kv_cache_state_id``.",
+  "properties": {
+    "assigned_node_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Assigned Node Id"
+    },
+    "attempt": {
+      "default": 0,
+      "description": "Number of dispatch attempts made so far.",
+      "minimum": 0,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "caller": {
+      "default": "unknown",
+      "description": "Originating agent or subsystem.",
+      "title": "Caller",
+      "type": "string"
+    },
+    "deadline_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Absolute deadline; derived from the latency budget when omitted.",
+      "title": "Deadline At"
+    },
+    "error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error"
+    },
+    "job_id": {
+      "title": "Job Id",
+      "type": "string"
+    },
+    "kv_cache_state_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "EdgeRecord document id of the KV-cache/resume state for this job.",
+      "title": "Kv Cache State Id"
+    },
+    "max_acceptable_latency_ms": {
+      "description": "Latency budget measured from submission.",
+      "maximum": 86400000,
+      "minimum": 1,
+      "title": "Max Acceptable Latency Ms",
+      "type": "integer"
+    },
+    "not_before": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Earliest time the job may be dispatched (sleep-time gating).",
+      "title": "Not Before"
+    },
+    "payload": {
+      "$ref": "#/$defs/InferencePayload"
+    },
+    "phase": {
+      "$ref": "#/$defs/ExecutionPhase",
+      "default": "monolithic"
+    },
+    "priority_tier": {
+      "$ref": "#/$defs/PriorityTier",
+      "description": "INTERACTIVE for latency-bound work, FLEX for sleep-time compute."
+    },
+    "result_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Result Text"
+    },
+    "resume_point": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResumePoint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Populated when the job is re-queued after a fault."
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "state": {
+      "$ref": "#/$defs/JobState",
+      "default": "queued"
+    },
+    "submitted_at": {
+      "format": "date-time",
+      "title": "Submitted At",
+      "type": "string"
+    },
+    "tags": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "priority_tier",
+    "payload",
+    "max_acceptable_latency_ms"
+  ],
+  "title": "InferenceJob",
+  "type": "object"
+}

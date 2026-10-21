@@ -1,0 +1,214 @@
+{
+  "$defs": {
+    "PartialToken": {
+      "additionalProperties": false,
+      "description": "A single token already produced by the interrupted generation.",
+      "properties": {
+        "index": {
+          "description": "Zero-based position in the completion stream.",
+          "minimum": 0,
+          "title": "Index",
+          "type": "integer"
+        },
+        "logprob": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Log probability at emission time.",
+          "title": "Logprob"
+        },
+        "text": {
+          "default": "",
+          "description": "Decoded surface form of the token.",
+          "title": "Text",
+          "type": "string"
+        },
+        "token_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Vocabulary id when known.",
+          "title": "Token Id"
+        }
+      },
+      "required": [
+        "index"
+      ],
+      "title": "PartialToken",
+      "type": "object"
+    },
+    "ResumePoint": {
+      "additionalProperties": false,
+      "description": "Exact resumption coordinates for an interrupted generation.\n\n``decode_step`` is the authoritative position in the decode loop. The\n``kv_cache_ref`` points at the KV-cache blob persisted in EdgeRecord; it is\nthe same identifier surfaced as ``InferenceJob.kv_cache_state_id``.",
+      "properties": {
+        "checksum_algorithm": {
+          "default": "sha256",
+          "title": "Checksum Algorithm",
+          "type": "string"
+        },
+        "decode_step": {
+          "description": "Decode iterations completed before the fault.",
+          "minimum": 0,
+          "title": "Decode Step",
+          "type": "integer"
+        },
+        "generated_token_count": {
+          "description": "Tokens emitted before the fault.",
+          "minimum": 0,
+          "title": "Generated Token Count",
+          "type": "integer"
+        },
+        "kv_cache_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "EdgeRecord document id of the KV cache.",
+          "title": "Kv Cache Ref"
+        },
+        "kv_cache_state_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Alias of kv_cache_ref.",
+          "title": "Kv Cache State Id"
+        },
+        "model": {
+          "default": "",
+          "description": "Model that produced the state.",
+          "title": "Model",
+          "type": "string"
+        },
+        "prompt_hash": {
+          "description": "sha256 of the canonical prompt, guards against payload drift.",
+          "title": "Prompt Hash",
+          "type": "string"
+        }
+      },
+      "required": [
+        "decode_step",
+        "generated_token_count",
+        "prompt_hash"
+      ],
+      "title": "ResumePoint",
+      "type": "object"
+    }
+  },
+  "$id": "https://hamanaka.local/horizon-broker/fault_recovery_snapshot.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The record committed to EdgeRecord when a node dies mid-inference.\n\nCommitting a snapshot is the only sanctioned way to make a job resumable.\nThe broker writes one every ``checkpoint_every_tokens`` / ``checkpoint_every_seconds``\n(whichever fires first) while a generation is in flight.",
+  "properties": {
+    "attempt": {
+      "default": 0,
+      "description": "Attempt counter of the owning job.",
+      "minimum": 0,
+      "title": "Attempt",
+      "type": "integer"
+    },
+    "content_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "sha256 over the canonical payload; set on the ledger record.",
+      "title": "Content Hash"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "job_id": {
+      "description": "Job this snapshot belongs to.",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "ledger_document_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Filled in once the snapshot is committed to EdgeRecord.",
+      "title": "Ledger Document Id"
+    },
+    "model": {
+      "description": "Model identifier of the interrupted generation.",
+      "title": "Model",
+      "type": "string"
+    },
+    "node_id": {
+      "description": "Node that owned the job when the snapshot was taken.",
+      "title": "Node Id",
+      "type": "string"
+    },
+    "partial_tokens": {
+      "description": "Tokens produced so far, in emission order.",
+      "items": {
+        "$ref": "#/$defs/PartialToken"
+      },
+      "title": "Partial Tokens",
+      "type": "array"
+    },
+    "resume_point": {
+      "$ref": "#/$defs/ResumePoint"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "snapshot_id": {
+      "title": "Snapshot Id",
+      "type": "string"
+    },
+    "step": {
+      "description": "Decode step reached at checkpoint time.",
+      "minimum": 0,
+      "title": "Step",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "job_id",
+    "node_id",
+    "model",
+    "step",
+    "resume_point"
+  ],
+  "title": "FaultRecoverySnapshot",
+  "type": "object"
+}

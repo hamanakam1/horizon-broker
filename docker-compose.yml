@@ -1,0 +1,21 @@
+services:
+  horizon-broker:
+    build: .
+    image: horizon-broker:0.1.0
+    container_name: horizon-broker
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8791:8791"
+    volumes:
+      - ./config:/app/config:ro
+      - horizon-state:/var/lib/horizon-broker
+    environment:
+      HORIZON_BROKER_HOST: "0.0.0.0"
+      HORIZON_BROKER_PORT: "8791"
+      HORIZON_BROKER_LEDGER_BASE_URL: "http://host.docker.internal:8787"
+      HORIZON_BROKER_OLLAMA_BASE_URL: "http://host.docker.internal:11434"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  horizon-state:

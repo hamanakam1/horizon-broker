@@ -1,0 +1,48 @@
+"""Broker error taxonomy.
+
+Every failure mode that the scheduler, router or recovery coordinator can
+surface has a dedicated type so the ingress layer can map it onto an HTTP
+status without string matching.
+"""
+
+from __future__ import annotations
+
+
+class BrokerError(Exception):
+    """Base class for all broker errors."""
+
+
+class UnknownJobError(BrokerError):
+    """The referenced job id is not known to the broker."""
+
+
+class JobExpiredError(BrokerError):
+    """The job's latency budget elapsed before it could be dispatched."""
+
+
+class NoCapacityError(BrokerError):
+    """No node in the mesh can accept the job right now."""
+
+
+class NodeUnreachableError(BrokerError):
+    """The control channel to a node closed or timed out."""
+
+
+class RoutingError(BrokerError):
+    """The PD-DAG router could not place the job."""
+
+
+class LedgerError(BrokerError):
+    """Base class for EdgeRecord transport failures."""
+
+
+class LedgerUnavailableError(LedgerError):
+    """EdgeRecord could not be reached; the local journal is used as a fallback."""
+
+
+class RecoveryBudgetExceededError(BrokerError):
+    """Recovery could not complete inside the configured budget."""
+
+
+class MaxAttemptsExceededError(BrokerError):
+    """The job exhausted its retry budget."""

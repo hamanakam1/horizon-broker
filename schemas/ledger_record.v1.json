@@ -1,0 +1,53 @@
+{
+  "$id": "https://hamanaka.local/horizon-broker/ledger_record.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A record persisted in EdgeRecord.",
+  "properties": {
+    "collection": {
+      "description": "Target collection, e.g. horizon_broker.snapshots.",
+      "title": "Collection",
+      "type": "string"
+    },
+    "content_hash": {
+      "default": "",
+      "description": "sha256 over the canonical payload.",
+      "title": "Content Hash",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "document_id": {
+      "description": "Stable, deterministic document id.",
+      "title": "Document Id",
+      "type": "string"
+    },
+    "payload": {
+      "additionalProperties": true,
+      "title": "Payload",
+      "type": "object"
+    },
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "tags": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    }
+  },
+  "required": [
+    "collection",
+    "document_id"
+  ],
+  "title": "LedgerRecord",
+  "type": "object"
+}

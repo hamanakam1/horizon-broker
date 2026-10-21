@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "horizon-broker"
+version = "0.1.0"
+description = "The Horizon Broker - asynchronous inference queue and fault-tolerance manager for a heterogeneous edge fleet"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Michael Hamanaka"}]
+requires-python = ">=3.11"
+keywords = ["inference", "scheduler", "edge", "fault-tolerance", "ollama"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Distributed Computing",
+]
+dependencies = [
+    "pydantic>=2.5",
+    "aiohttp>=3.9",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.21",
+    "mypy>=1.8",
+    "ruff>=0.1.0",
+    "types-PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/hamanakam1/horizon-broker"
+Repository = "https://github.com/hamanakam1/horizon-broker"
+Issues = "https://github.com/hamanakam1/horizon-broker/issues"
+
+[project.scripts]
+horizon-broker = "horizon_broker.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["horizon_broker*"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+exclude = ["tests/"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = ["E", "F", "I", "UP", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["horizon_broker"]
+omit = ["tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "raise NotImplementedError"]
+show_missing = true

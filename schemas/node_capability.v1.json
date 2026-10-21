@@ -1,0 +1,224 @@
+{
+  "$defs": {
+    "ExecutionMode": {
+      "description": "How the broker drives work on the node.",
+      "enum": [
+        "ollama_direct",
+        "agent_container"
+      ],
+      "title": "ExecutionMode",
+      "type": "string"
+    },
+    "NodeHealth": {
+      "description": "Health as judged by the heartbeat watchdog.",
+      "enum": [
+        "healthy",
+        "degraded",
+        "draining",
+        "suspect",
+        "lost",
+        "offline"
+      ],
+      "title": "NodeHealth",
+      "type": "string"
+    },
+    "NodeRole": {
+      "description": "Where the node sits in the prefill/decode split.",
+      "enum": [
+        "prefill",
+        "decode",
+        "general"
+      ],
+      "title": "NodeRole",
+      "type": "string"
+    },
+    "PowerClass": {
+      "description": "Power envelope of the node.",
+      "enum": [
+        "grid",
+        "solar_trailer",
+        "battery"
+      ],
+      "title": "PowerClass",
+      "type": "string"
+    }
+  },
+  "$id": "https://hamanaka.local/horizon-broker/node_capability.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Capability profile of one execution node.",
+  "properties": {
+    "agent_ws_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "WebSocket control channel (agent container).",
+      "title": "Agent Ws Url"
+    },
+    "assigned_job_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Assigned Job Ids",
+      "type": "array"
+    },
+    "available_vram_bytes": {
+      "description": "Free memory usable right now.",
+      "minimum": 0,
+      "title": "Available Vram Bytes",
+      "type": "integer"
+    },
+    "current_batch_size": {
+      "default": 0,
+      "description": "Jobs already in flight on the node.",
+      "minimum": 0,
+      "title": "Current Batch Size",
+      "type": "integer"
+    },
+    "endpoint": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Base HTTP endpoint (Ollama).",
+      "title": "Endpoint"
+    },
+    "execution_mode": {
+      "$ref": "#/$defs/ExecutionMode",
+      "default": "ollama_direct"
+    },
+    "health": {
+      "$ref": "#/$defs/NodeHealth",
+      "default": "healthy"
+    },
+    "is_decode_optimized": {
+      "default": false,
+      "description": "Memory-bandwidth-bound: ideal for long token emission.",
+      "title": "Is Decode Optimized",
+      "type": "boolean"
+    },
+    "is_prefill_optimized": {
+      "default": false,
+      "description": "Compute-bound: fast FLOPs, wide memory, ideal for large prefills.",
+      "title": "Is Prefill Optimized",
+      "type": "boolean"
+    },
+    "last_heartbeat_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Heartbeat At"
+    },
+    "max_batch_size": {
+      "default": 1,
+      "minimum": 1,
+      "title": "Max Batch Size",
+      "type": "integer"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "title": "Metadata",
+      "type": "object"
+    },
+    "model_whitelist": {
+      "default": [],
+      "description": "Models the node can serve; empty means unrestricted.",
+      "items": {
+        "type": "string"
+      },
+      "title": "Model Whitelist",
+      "type": "array"
+    },
+    "node_id": {
+      "title": "Node Id",
+      "type": "string"
+    },
+    "ollama_url": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Ollama URL when execution_mode is OLLAMA_DIRECT.",
+      "title": "Ollama Url"
+    },
+    "power_class": {
+      "$ref": "#/$defs/PowerClass",
+      "default": "grid"
+    },
+    "power_headroom": {
+      "default": 1.0,
+      "description": "0.0 = flat battery, 1.0 = full surplus.",
+      "maximum": 1.0,
+      "minimum": 0.0,
+      "title": "Power Headroom",
+      "type": "number"
+    },
+    "quarantined_until": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Node is excluded from placement until this instant.",
+      "title": "Quarantined Until"
+    },
+    "role": {
+      "$ref": "#/$defs/NodeRole",
+      "default": "general"
+    },
+    "tokens_per_second": {
+      "anyOf": [
+        {
+          "minimum": 0.0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tokens Per Second"
+    },
+    "total_vram_bytes": {
+      "minimum": 0,
+      "title": "Total Vram Bytes",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "node_id",
+    "available_vram_bytes",
+    "total_vram_bytes"
+  ],
+  "title": "NodeCapability",
+  "type": "object"
+}

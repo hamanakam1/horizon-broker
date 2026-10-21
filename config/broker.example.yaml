@@ -1,0 +1,107 @@
+# The Horizon Broker - example configuration.
+#
+# Every value below is a default; anything you omit keeps the built-in
+# default. Environment variables override the file:
+#   HORIZON_BROKER_PORT, HORIZON_BROKER_OLLAMA_BASE_URL,
+#   HORIZON_BROKER_LEDGER_BASE_URL, HORIZON_BROKER_WINDOW_SECONDS, ...
+
+broker:
+  host: 127.0.0.1
+  port: 8791
+  log_level: INFO
+  journal_path: ./var/horizon-broker/journal.jsonl
+
+heartbeat:
+  interval_seconds: 2.0
+  timeout_seconds: 6.0
+  missed_beats_before_loss: 3
+  reconnect_backoff_seconds: 0.5
+  reconnect_backoff_max_seconds: 30.0
+
+window:
+  window_seconds: 45.0
+  min_batch_size: 4
+  max_batch_size: 32
+  min_dwell_seconds: 5.0
+  power_headroom_threshold: 0.25
+  power_gated_tiers:
+    - solar_trailer
+    - battery
+
+scheduling:
+  interactive_concurrency: 4
+  flex_concurrency: 8
+  interactive_latency_threshold_ms: 2000
+  poll_interval_seconds: 0.25
+
+recovery:
+  max_attempts: 3
+  recovery_budget_seconds: 30.0
+  checkpoint_every_tokens: 64
+  checkpoint_every_seconds: 10.0
+  quarantine_seconds: 120.0
+
+ledger:
+  enabled: true
+  base_url: http://127.0.0.1:8787
+  collection: horizon_broker.snapshots
+  timeout_seconds: 5.0
+
+ollama:
+  base_url: http://127.0.0.1:11434
+  timeout_seconds: 600.0
+  keep_alive: 30m
+
+# The fleet. Roles: prefill | decode | general.
+# Power classes: grid | solar_trailer | battery.
+nodes:
+  - node_id: m3-max
+    role: prefill
+    is_prefill_optimized: true
+    is_decode_optimized: false
+    available_vram_bytes: 100000000000
+    total_vram_bytes: 128000000000
+    current_batch_size: 0
+    max_batch_size: 8
+    model_whitelist:
+      - qwen2.5:32b
+      - qwen2.5:14b
+      - qwen3:30b-a3b
+    tokens_per_second: 42.0
+    power_class: grid
+    power_headroom: 1.0
+    execution_mode: ollama_direct
+    ollama_url: http://127.0.0.1:11434
+
+  - node_id: pi-grid-01
+    role: decode
+    is_prefill_optimized: false
+    is_decode_optimized: true
+    available_vram_bytes: 7000000000
+    total_vram_bytes: 8000000000
+    current_batch_size: 0
+    max_batch_size: 4
+    model_whitelist:
+      - qwen2.5:7b
+      - qwen3:8b
+    tokens_per_second: 18.0
+    power_class: grid
+    power_headroom: 1.0
+    execution_mode: ollama_direct
+    ollama_url: http://pi-grid-01.lan:11434
+
+  - node_id: trailer-node-01
+    role: general
+    is_prefill_optimized: false
+    is_decode_optimized: true
+    available_vram_bytes: 7000000000
+    total_vram_bytes: 8000000000
+    current_batch_size: 0
+    max_batch_size: 4
+    model_whitelist:
+      - qwen2.5:7b
+    tokens_per_second: 14.0
+    power_class: solar_trailer
+    power_headroom: 0.8
+    execution_mode: agent_container
+    agent_ws_url: ws://trailer-node-01.lan:9100/broker

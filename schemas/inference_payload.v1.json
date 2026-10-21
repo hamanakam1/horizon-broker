@@ -1,0 +1,170 @@
+{
+  "$defs": {
+    "ChatMessage": {
+      "additionalProperties": false,
+      "description": "One chat turn in a structured prompt.",
+      "properties": {
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "role": {
+          "default": "user",
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ],
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "title": "ChatMessage",
+      "type": "object"
+    },
+    "SamplingParams": {
+      "additionalProperties": false,
+      "description": "Sampler configuration forwarded to the inference engine.",
+      "properties": {
+        "num_predict": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Hard cap on generated tokens.",
+          "title": "Num Predict"
+        },
+        "repeat_penalty": {
+          "default": 1.1,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Repeat Penalty",
+          "type": "number"
+        },
+        "seed": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seed"
+        },
+        "stop": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop",
+          "type": "array"
+        },
+        "temperature": {
+          "default": 0.8,
+          "maximum": 2.0,
+          "minimum": 0.0,
+          "title": "Temperature",
+          "type": "number"
+        },
+        "top_k": {
+          "default": 40,
+          "minimum": 0,
+          "title": "Top K",
+          "type": "integer"
+        },
+        "top_p": {
+          "default": 0.95,
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0,
+          "title": "Top P",
+          "type": "number"
+        }
+      },
+      "title": "SamplingParams",
+      "type": "object"
+    }
+  },
+  "$id": "https://hamanaka.local/horizon-broker/inference_payload.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The inference request itself, decoupled from scheduling concerns.",
+  "properties": {
+    "expected_output_tokens": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Declared generation size; drives PD-DAG routing.",
+      "title": "Expected Output Tokens"
+    },
+    "messages": {
+      "items": {
+        "$ref": "#/$defs/ChatMessage"
+      },
+      "title": "Messages",
+      "type": "array"
+    },
+    "model": {
+      "description": "Model identifier understood by the target engine.",
+      "title": "Model",
+      "type": "string"
+    },
+    "parameters": {
+      "$ref": "#/$defs/SamplingParams"
+    },
+    "prompt": {
+      "default": "",
+      "title": "Prompt",
+      "type": "string"
+    },
+    "prompt_tokens_hint": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Declared prompt size; avoids guessing when the caller knows.",
+      "title": "Prompt Tokens Hint"
+    },
+    "system": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "System"
+    }
+  },
+  "required": [
+    "model"
+  ],
+  "title": "InferencePayload",
+  "type": "object"
+}
