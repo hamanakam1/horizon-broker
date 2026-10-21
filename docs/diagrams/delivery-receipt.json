@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "artifactId": "7c81f2978e534e9c874d6f9bd185b4da",
+  "diagramType": "architecture",
+  "title": "The Horizon Broker",
+  "area": "platform",
+  "deliveredAt": "2026-10-21T23:42:41Z",
+  "specification": {
+    "path": "docs/diagrams/horizon-broker.architecture.json",
+    "sha256": "a422260a3e2b63d41b7c994e6b30476637cd861e3fabb43695759fc04ba8ee46",
+    "bytes": 5896
+  },
+  "artifact": {
+    "sha256": "d36d1b74ac42ec8279f9ac77c453e57c1d9baf4b9459fc39484721db28b97007",
+    "bytes": 718317
+  },
+  "validation": {
+    "profile": "showcase",
+    "status": "pass",
+    "checksPassed": 9,
+    "checkCount": 9,
+    "errors": 0,
+    "warnings": 0
+  },
+  "browserEvidence": {
+    "status": "pass",
+    "viewports": ["1440x900", "2048x1320"],
+    "themes": ["light", "dark"],
+    "screenshots": [
+      "diagram.visual-check.1440x900.light.png",
+      "diagram.visual-check.1440x900.dark.png",
+      "diagram.visual-check.2048x1320.light.png",
+      "diagram.visual-check.2048x1320.dark.png"
+    ],
+    "visualReview": "pending"
+  },
+  "notes": [
+    "The specification is byte-identical to the frozen delivery snapshot.",
+    "Source evidence was not attached: the broker repository is not a declared source root for the dashboard integration, so freshness is reported as unknown rather than claimed."
+  ]
+}

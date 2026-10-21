@@ -209,6 +209,14 @@ The recovery coordinator is deliberately conservative:
 * the retry budget is finite (`recovery.max_attempts`). After that the job
   fails loudly instead of looping forever.
 
+## Architecture diagram
+
+The interactive version of this map is published to the dashboard
+(`http://127.0.0.1:7878/#archify`, artifact
+`7c81f2978e534e9c874d6f9bd185b4da`). The typed specification lives at
+`docs/diagrams/horizon-broker.architecture.json` and the delivery receipt at
+`docs/diagrams/delivery-receipt.json`.
+
 ## Deliberate limits
 
 * One broker owns one fleet. There is no broker-to-broker consensus; a
