@@ -1,5 +1,11 @@
 # The Horizon Broker
 
+[![CI](https://github.com/hamanakam1/horizon-broker/actions/workflows/ci.yml/badge.svg)](https://github.com/hamanakam1/horizon-broker/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/docker-ready-2496ed)](Dockerfile)
+[![Releases](https://img.shields.io/github/v/release/hamanakam1/horizon-broker)](https://github.com/hamanakam1/horizon-broker/releases)
+
 **Asynchronous inference queue and fault-tolerance manager for a heterogeneous edge fleet.**
 
 The Horizon Broker intercepts every request bound for the local Ollama/Qwen
