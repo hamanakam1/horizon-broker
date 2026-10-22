@@ -39,7 +39,9 @@
         ],
         "note": "The two things a snapshot points back at."
       }
-    ]
+    ],
+    "visual_preset": "blueprint",
+    "subtitle": "the documents the broker persists, and who may write them"
   },
   "layout": {
     "mode": "grid",

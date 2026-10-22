@@ -120,7 +120,8 @@
           "end_line": 260,
           "label": "InferenceJob"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "nodes_contract",
@@ -134,7 +135,8 @@
           "end_line": 143,
           "label": "NodeCapability"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "recovery_contract",
@@ -148,7 +150,8 @@
           "end_line": 106,
           "label": "FaultRecoverySnapshot"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "ledger_contract",
@@ -162,7 +165,8 @@
           "end_line": 71,
           "label": "LedgerRecord"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "errors_contract",
@@ -176,7 +180,8 @@
           "end_line": 56,
           "label": "error taxonomy"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "ingress",
@@ -204,7 +209,8 @@
           "end_line": 120,
           "label": "job_from_payload and the routes"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "openai",
@@ -218,7 +224,8 @@
           "end_line": 172,
           "label": "chat_request_to_job"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "server",
@@ -232,7 +239,8 @@
           "end_line": 62,
           "label": "BrokerServer"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "scheduler",
@@ -260,7 +268,8 @@
           "end_line": 209,
           "label": "start and drain"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "priority_queue",
@@ -442,7 +451,8 @@
           "end_line": 106,
           "label": "NodeHealthProbe"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "connection",
@@ -456,7 +466,8 @@
           "end_line": 140,
           "label": "NodeConnection"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "manager",
@@ -470,7 +481,8 @@
           "end_line": 122,
           "label": "NodeConnectionManager"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "recovery",
@@ -498,7 +510,8 @@
           "end_line": 180,
           "label": "recover"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "snapshot_store",
@@ -512,7 +525,8 @@
           "end_line": 120,
           "label": "SnapshotStore"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "ledger_client",
@@ -526,7 +540,8 @@
           "end_line": 130,
           "label": "EdgeRecordClient"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "journal",
@@ -540,7 +555,8 @@
           "end_line": 92,
           "label": "LocalJournal"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "ollama",
@@ -568,7 +584,8 @@
           "end_line": 141,
           "label": "generate"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "observability",
@@ -596,7 +613,8 @@
           "end_line": 144,
           "label": "render"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "logging",
@@ -610,7 +628,8 @@
           "end_line": 37,
           "label": "JsonFormatter"
         }
-      ]
+      ],
+      "collapsed": true
     },
     {
       "id": "cli",

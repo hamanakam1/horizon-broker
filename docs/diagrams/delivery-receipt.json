@@ -82,26 +82,26 @@
       "artifactBytes": 830336
     },
     {
-      "artifactId": "95476e56f1be4fa4b970e6d8f1070f27",
+      "artifactId": "5ab439f8d10048f38fb9e11fe1724c5d",
       "diagramType": "dataflow",
       "title": "The Horizon Broker \u2014 how a checkpoint becomes durable",
       "specification": "docs/diagrams/horizon-broker.checkpoint-dataflow.json",
-      "specificationSha256": "de09b547b2202978456b3e71cdbd41c7b6d75b6340cfca8b611735bba0153a2f",
-      "specificationBytes": 7844,
+      "specificationSha256": "3c3cf31070d74f605197ef3fa649364598ee86e96dd057eadc7f203abff7402a",
+      "specificationBytes": 7941,
       "screenshot": "docs/images/diagram-checkpoint-dataflow.png",
-      "artifactSha256": "24414186aeaffc3c9a90812f5140dc280041ce22308929de76e221d0becab1f0",
-      "artifactBytes": 826579
+      "artifactSha256": "4fc203d94f8bdc67a61604629a3a80eb40e70a6a53c1a5af9c88f27e825fd7ce",
+      "artifactBytes": 826659
     },
     {
-      "artifactId": "5d09bd154f6145e7bea2cc70a87fe8c7",
+      "artifactId": "c4cd7a4f7a3546f38801db6f17f25ccc",
       "diagramType": "erd",
       "title": "The Horizon Broker \u2014 the durable state",
       "specification": "docs/diagrams/horizon-broker.state-erd.json",
-      "specificationSha256": "be4988ae5829bf6f2e24ff213e631eb286c80c63cbb5a224c2bffa6115b8ee33",
-      "specificationBytes": 9642,
+      "specificationSha256": "53a6405448ae5cd4825a96e1c4ae5b6377ecb3f8ef082753112caa5b98ec4605",
+      "specificationBytes": 9753,
       "screenshot": "docs/images/diagram-state-erd.png",
-      "artifactSha256": "7bbe8bd21d719450ed9135f0c2380d133c17632a40b2a7a684dcd633faa19723",
-      "artifactBytes": 845792
+      "artifactSha256": "28d9ffad99586f2f3994ab57f2c9b370153706f4a0110f15d0c86dc0e695c22e",
+      "artifactBytes": 845889
     },
     {
       "artifactId": "7c1c430ce7c54c4f8c205b49e99547d3",
@@ -115,12 +115,12 @@
       "artifactBytes": 867655
     },
     {
-      "artifactId": "c3875856ce564c47956e5a8fa1493484",
+      "artifactId": "c96721245a314af9933664173c057013",
       "diagramType": "tree",
       "title": "The Horizon Broker \u2014 the package tree",
       "specification": "docs/diagrams/horizon-broker.package-tree.json",
-      "specificationSha256": "e083e64fdbc192424eb4a5384f75ee6bf72a49ceec68a1b5dfcf502451639660",
-      "specificationBytes": 16196,
+      "specificationSha256": "28a94803267b35998fa05468e3998bcb20218875bcc793cd65a2b97131a94fb5",
+      "specificationBytes": 16671,
       "screenshot": "docs/images/diagram-package-tree.png",
       "artifactSha256": "7b1b9668e68b0d912d80d2dc5dec5c2d45ffa8d3c17093f6dccc6bb57fa94492",
       "artifactBytes": 885677

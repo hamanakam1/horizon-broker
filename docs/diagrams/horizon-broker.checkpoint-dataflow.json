@@ -49,7 +49,9 @@
         ],
         "note": "One snapshot, written once and read twice."
       }
-    ]
+    ],
+    "visual_preset": "signal-flow",
+    "subtitle": "one snapshot, written once and read twice"
   },
   "stages": [
     {
