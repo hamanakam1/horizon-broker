@@ -112,7 +112,6 @@ latency budget that decides the tier). Other clients ignore them.
 Submit work directly. The broker categorises it: a latency budget at or
 below `interactive_latency_threshold_ms` (2 s by default) is dispatched
 immediately, anything slower is sleep-time compute.
-
 ```sh
 curl -sX POST http://127.0.0.1:8791/v1/jobs \
   -H 'content-type: application/json' \
@@ -156,6 +155,19 @@ curl -s http://127.0.0.1:8791/v1/jobs/0f2c... | python3 -m json.tool
 Submission is idempotent: posting the same `job_id` twice returns the job
 that is already known instead of starting the work again, so a caller that
 retries after a timeout cannot double-execute.
+
+### The operator CLI
+
+```sh
+horizon-broker-cli nodes
+horizon-broker-cli job submit --prompt "Map the ingestion pipeline" --tier flex
+horizon-broker-cli job status <job-id>
+horizon-broker-cli job list
+horizon-broker-cli health
+```
+
+The CLI talks to a running broker over its HTTP API, so it can be run from
+another machine (`--base-url`).
 
 ## Configuration
 

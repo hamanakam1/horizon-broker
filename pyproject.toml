@@ -42,6 +42,7 @@ Issues = "https://github.com/hamanakam1/horizon-broker/issues"
 
 [project.scripts]
 horizon-broker = "horizon_broker.__main__:main"
+horizon-broker-cli = "horizon_broker.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

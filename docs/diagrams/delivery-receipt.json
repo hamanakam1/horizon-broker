@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "artifactId": "7c81f2978e534e9c874d6f9bd185b4da",
+  "artifactId": "5430cd53cb634edb82137abfe9b34d9e",
   "diagramType": "architecture",
   "title": "The Horizon Broker",
   "area": "platform",
-  "deliveredAt": "2026-10-21T23:42:41Z",
+  "deliveredAt": "2026-10-22T04:46:00Z",
   "specification": {
     "path": "docs/diagrams/horizon-broker.architecture.json",
-    "sha256": "a422260a3e2b63d41b7c994e6b30476637cd861e3fabb43695759fc04ba8ee46",
-    "bytes": 5896
+    "sha256": "3af1755af607293d3dcbd7d9788ad5cf6ca49c0fe1662377e6c6f4811e5e4f6c",
+    "bytes": 5910
   },
   "artifact": {
-    "sha256": "d36d1b74ac42ec8279f9ac77c453e57c1d9baf4b9459fc39484721db28b97007",
-    "bytes": 718317
+    "sha256": "45ff3b078bfeedffaf69c5848d4556830ed31dddde044c5fabe8bd2b3140678f",
+    "bytes": 718405
   },
   "validation": {
     "profile": "showcase",
@@ -24,8 +24,14 @@
   },
   "browserEvidence": {
     "status": "pass",
-    "viewports": ["1440x900", "2048x1320"],
-    "themes": ["light", "dark"],
+    "viewports": [
+      "1440x900",
+      "2048x1320"
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
     "screenshots": [
       "diagram.visual-check.1440x900.light.png",
       "diagram.visual-check.1440x900.dark.png",
@@ -36,6 +42,7 @@
   },
   "notes": [
     "The specification is byte-identical to the frozen delivery snapshot.",
-    "Source evidence was not attached: the broker repository is not a declared source root for the dashboard integration, so freshness is reported as unknown rather than claimed."
+    "Source evidence was not attached: the broker repository is not a declared source root for the dashboard integration, so freshness is reported as unknown rather than claimed.",
+    "Revised after the OpenAI-compatible ingress and the direct-node health probe were added; the earlier artifact 7c81f2978e534e9c874d6f9bd185b4da described the pre-OpenAI shape."
   ]
 }

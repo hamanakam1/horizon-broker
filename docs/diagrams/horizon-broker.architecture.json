@@ -39,8 +39,8 @@
     {
       "id": "agent",
       "type": "external",
-      "label": "Autonomous agent",
-      "sublabel": "Long-horizon request",
+      "label": "Agents & CLIs",
+      "sublabel": "OpenAI-compatible callers",
       "pos": [
         40,
         60
@@ -54,7 +54,7 @@
       "id": "ingress",
       "type": "frontend",
       "label": "Ingress API",
-      "sublabel": "Tier categorisation",
+      "sublabel": "Native + OpenAI translation",
       "pos": [
         210,
         60
@@ -152,7 +152,7 @@
       "id": "watchdog",
       "type": "security",
       "label": "Heartbeat watchdog",
-      "sublabel": "Silence declares LOST",
+      "sublabel": "Heartbeat + probe -> LOST",
       "pos": [
         390,
         520

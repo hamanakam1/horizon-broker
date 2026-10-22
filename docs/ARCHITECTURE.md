@@ -270,7 +270,7 @@ The recovery coordinator is deliberately conservative:
 
 The interactive version of this map is published to the dashboard
 (`http://127.0.0.1:7878/#archify`, artifact
-`7c81f2978e534e9c874d6f9bd185b4da`). The typed specification lives at
+`5430cd53cb634edb82137abfe9b34d9e`). The typed specification lives at
 `docs/diagrams/horizon-broker.architecture.json` and the delivery receipt at
 `docs/diagrams/delivery-receipt.json`.
 
