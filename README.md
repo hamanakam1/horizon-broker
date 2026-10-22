@@ -203,6 +203,10 @@ another machine (`--base-url`).
 
 ### In pictures
 
+Every screenshot below was captured from a broker running on this machine
+against a live Ollama engine, with a three-node demo fleet (a prefill node, a
+decode node and a solar trailer) pointed at the local engine.
+
 | The fleet | A job end to end |
 | --- | --- |
 | ![The fleet as the CLI sees it](docs/images/terminal-fleet.png) | ![Submitting a job](docs/images/terminal-job.png) |
