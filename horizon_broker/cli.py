@@ -3,6 +3,7 @@
     horizon-broker-cli job submit --model qwen2.5:7b --prompt "..." --tier flex
     horizon-broker-cli job status <job-id>
     horizon-broker-cli job list
+    horizon-broker-cli queue
     horizon-broker-cli nodes
     horizon-broker-cli health
 
@@ -96,7 +97,40 @@ async def cmd_job_cancel(args: argparse.Namespace) -> int:
 
 
 async def cmd_job_list(args: argparse.Namespace) -> int:
-    """Show the queue occupancy."""
+    """List the tracked jobs, newest first.
+
+    The header carries ``total`` vs ``count`` so an operator notices when a
+    response was truncated by the limit instead of assuming the mesh is idle.
+    """
+    status, response = await _request(args, "GET", "/v1/jobs")
+    if status != 200:
+        print(f"the broker did not answer (HTTP {status})", file=sys.stderr)
+        _print(response)
+        return 1
+    if not isinstance(response, dict):
+        _print(response)
+        return 0
+    total = int(response.get("total", 0))
+    jobs = response.get("jobs", [])
+    print(f"{len(jobs)} of {total} job(s), newest first")
+    print(f"{'JOB':<20} {'STATE':<11} {'TIER':<12} {'MODEL':<16} NODE")
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        job_id = str(job.get("job_id", ""))[:20]
+        state = str(job.get("state", ""))
+        tier = str(job.get("priority_tier", ""))
+        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        model = str(payload.get("model", "")) if payload else ""
+        node = str(job.get("assigned_node_id") or "-")
+        print(f"{job_id:<20} {state:<11} {tier:<12} {model:<16} {node}")
+        if job.get("error"):
+            print(f"job {job_id} carries an error; see `job status {job_id}`")
+    return 0
+
+
+async def cmd_queue(args: argparse.Namespace) -> int:
+    """Show the queue occupancy and the in-flight counters."""
     status, response = await _request(args, "GET", "/v1/queue")
     if status != 200:
         print(f"the broker did not answer (HTTP {status})", file=sys.stderr)
@@ -160,11 +194,14 @@ def build_parser() -> argparse.ArgumentParser:
     job_cancel.add_argument("job_id")
     job_cancel.set_defaults(handler=cmd_job_cancel)
 
-    job_list = job_sub.add_parser("list", help="show the queue occupancy")
+    job_list = job_sub.add_parser("list", help="list the tracked jobs, newest first")
     job_list.set_defaults(handler=cmd_job_list)
 
     nodes = subparsers.add_parser("nodes", help="show the fleet")
     nodes.set_defaults(handler=cmd_nodes)
+
+    queue = subparsers.add_parser("queue", help="show the queue occupancy")
+    queue.set_defaults(handler=cmd_queue)
 
     health = subparsers.add_parser("health", help="show the broker health")
     health.set_defaults(handler=cmd_health)

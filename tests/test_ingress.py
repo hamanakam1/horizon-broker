@@ -187,6 +187,65 @@ async def test_a_draining_broker_returns_503(config: Any) -> None:
         await client.close()
 
 
+async def test_the_job_list_is_exposed(config: Any) -> None:
+    client, _ = await make_client(config)
+    try:
+        for _ in range(2):
+            await client.post(
+                "/v1/jobs",
+                json={
+                    "payload": {"model": "qwen2.5:7b", "prompt": "scan"},
+                    "max_acceptable_latency_ms": 600_000,
+                },
+            )
+        listing = await client.get("/v1/jobs")
+        assert listing.status == 200
+        body = await listing.json()
+        assert body["total"] == 2
+        assert body["count"] == 2
+        assert len(body["jobs"]) == 2
+
+        truncated = await client.get("/v1/jobs", params={"limit": "1"})
+        body = await truncated.json()
+        assert body["total"] == 2
+        assert body["count"] == 1
+    finally:
+        await client.close()
+
+
+async def test_cancelling_a_finished_job_is_a_409(config: Any) -> None:
+    """The second DELETE finds the job the first DELETE already cancelled."""
+    client, _ = await make_client(config)
+    try:
+        await client.post(
+            "/v1/jobs",
+            json={
+                "job_id": "cancellable",
+                "payload": {"model": "qwen2.5:7b", "prompt": "scan"},
+                "max_acceptable_latency_ms": 600_000,
+            },
+        )
+        first = await client.delete("/v1/jobs/cancellable")
+        assert first.status == 200
+        assert (await first.json())["cancelled"] is True
+
+        second = await client.delete("/v1/jobs/cancellable")
+        assert second.status == 409
+        assert (await second.json())["error"] == "job already finished"
+        assert (await second.json())["state"] == "cancelled"
+    finally:
+        await client.close()
+
+
+async def test_cancelling_an_unknown_job_is_a_404(config: Any) -> None:
+    client, _ = await make_client(config)
+    try:
+        response = await client.delete("/v1/jobs/never-existed")
+        assert response.status == 404
+    finally:
+        await client.close()
+
+
 async def test_a_duplicate_job_id_returns_the_original_job(config: Any) -> None:
     client, engine = await make_client(config)
     try:

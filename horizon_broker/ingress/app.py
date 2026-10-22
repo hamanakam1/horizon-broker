@@ -26,11 +26,15 @@ from horizon_broker.ingress.openai import (
     completion_object,
     sse,
 )
-from horizon_broker.scheduler.engine import BrokerEngine
+from horizon_broker.scheduler.engine import TERMINAL_STATES, BrokerEngine
 
 LOGGER = logging.getLogger(__name__)
 
 JSON = web.json_response
+
+TERMINAL_STATE_NAMES = {state.value for state in TERMINAL_STATES}
+MAX_JOB_LIST_LIMIT = 1_000
+DEFAULT_JOB_LIST_LIMIT = 100
 
 ENGINE_KEY: web.AppKey[BrokerEngine] = web.AppKey("engine")
 CONFIG_KEY: web.AppKey[BrokerConfig] = web.AppKey("config")
@@ -109,13 +113,39 @@ async def handle_status(request: web.Request) -> web.Response:
     return JSON(status)
 
 
+async def handle_jobs(request: web.Request) -> web.Response:
+    """``GET /v1/jobs`` -- the tracked jobs, newest first.
+
+    An operator greps this for stuck work; ``limit`` keeps one response
+    small instead of shipping the whole (bounded) store.
+    """
+    engine = _engine(request)
+    raw = request.query.get("limit", "")
+    limit = DEFAULT_JOB_LIST_LIMIT
+    if raw.isdigit():
+        limit = min(int(raw), MAX_JOB_LIST_LIMIT)
+    return JSON(engine.list_jobs(limit))
+
+
 async def handle_cancel(request: web.Request) -> web.Response:
-    """``DELETE /v1/jobs/{job_id}`` -- cancel queued or running work."""
+    """``DELETE /v1/jobs/{job_id}`` -- cancel queued or running work.
+
+    A finished job is never rewritten: the caller gets a 409 so it can tell
+    "lost the race with completion" apart from "never existed" (404).
+    """
     engine = _engine(request)
     job_id = request.match_info["job_id"]
+    status = engine.status(job_id)
+    if status is None:
+        return JSON({"error": "unknown job", "job_id": job_id}, status=404)
+    if status["state"] in TERMINAL_STATE_NAMES:
+        return JSON(
+            {"error": "job already finished", "state": status["state"], "job_id": job_id},
+            status=409,
+        )
     cancelled = await engine.cancel(job_id)
     if not cancelled:
-        return JSON({"error": "unknown job", "job_id": job_id}, status=404)
+        return JSON({"error": "not cancellable", "job_id": job_id}, status=409)
     return JSON({"job_id": job_id, "cancelled": True})
 
 
@@ -277,6 +307,7 @@ def create_app(engine: BrokerEngine, config: BrokerConfig) -> web.Application:
     app[ENGINE_KEY] = engine
     app[CONFIG_KEY] = config
     app.router.add_post("/v1/jobs", handle_submit)
+    app.router.add_get("/v1/jobs", handle_jobs)
     app.router.add_get("/v1/jobs/{job_id}", handle_status)
     app.router.add_delete("/v1/jobs/{job_id}", handle_cancel)
     app.router.add_get("/v1/nodes", handle_nodes)

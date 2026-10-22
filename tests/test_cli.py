@@ -30,6 +30,23 @@ async def start_broker() -> tuple[TestServer, str]:
     async def queue(request: web.Request) -> web.Response:
         return web.json_response({"queue": {"interactive": 1, "flex": 2}})
 
+    async def job_list(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "total": 1,
+                "count": 1,
+                "jobs": [
+                    {
+                        "job_id": "job-1",
+                        "state": "running",
+                        "priority_tier": "flex",
+                        "payload": {"model": "qwen2.5:7b"},
+                        "assigned_node_id": "m3-max",
+                    }
+                ],
+            }
+        )
+
     async def nodes(request: web.Request) -> web.Response:
         return web.json_response(
             {
@@ -52,6 +69,7 @@ async def start_broker() -> tuple[TestServer, str]:
 
     app = web.Application()
     app.router.add_post("/v1/jobs", submit)
+    app.router.add_get("/v1/jobs", job_list)
     app.router.add_get("/v1/jobs/{job_id}", job_status)
     app.router.add_delete("/v1/jobs/{job_id}", cancel)
     app.router.add_get("/v1/queue", queue)
@@ -110,10 +128,24 @@ async def test_the_client_cancels_a_job(capsys) -> None:
         await server.close()
 
 
-async def test_the_client_lists_the_queue(capsys) -> None:
+async def test_the_client_lists_the_jobs(capsys) -> None:
     server, url = await start_broker()
     try:
         code = await run(["--base-url", url, "job", "list"])
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "job-1" in out
+        assert "running" in out
+        assert "qwen2.5:7b" in out
+        assert "1 of 1 job(s)" in out
+    finally:
+        await server.close()
+
+
+async def test_the_client_shows_the_queue_occupancy(capsys) -> None:
+    server, url = await start_broker()
+    try:
+        code = await run(["--base-url", url, "queue"])
         assert code == 0
         assert "flex" in capsys.readouterr().out
     finally:
