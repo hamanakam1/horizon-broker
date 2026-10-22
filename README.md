@@ -390,7 +390,7 @@ make schemas     # regenerate schemas/*.v1.json
 ## Status
 
 **v0.2.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests (131 of them). The
+recovery paths are implemented and covered by tests (141 of them). The
 prefill/decode split runs end to end for engines that can export a KV cache
 (enable them in `routing.kv_handoff_models`); Ollama cannot, so the broker
 degrades a split to a whole-job run and says so in the log and the

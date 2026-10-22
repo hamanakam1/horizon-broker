@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
