@@ -1,7 +1,7 @@
 services:
   horizon-broker:
     build: .
-    image: horizon-broker:0.1.0
+    image: horizon-broker:0.2.0
     container_name: horizon-broker
     restart: unless-stopped
     ports:

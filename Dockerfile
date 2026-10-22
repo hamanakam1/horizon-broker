@@ -18,6 +18,12 @@ RUN mkdir -p /var/lib/horizon-broker && \
     chown -R horizon:horizon /var/lib/horizon-broker
 USER horizon
 
+# The documented run command points at config/broker.yaml, which the compose
+# stack mounts. A bare `docker run` has no such mount - fall back to the
+# bundled example configuration so the image answers on its own instead of
+# exiting exactly at the first health check.
+RUN test -f /app/config/broker.yaml || cp /app/config/broker.example.yaml /app/config/broker.yaml
+
 ENV JOURNAL_PATH=/var/lib/horizon-broker/journal.jsonl
 EXPOSE 8791
 

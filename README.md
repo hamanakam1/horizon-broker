@@ -145,6 +145,22 @@ fails loudly instead of at the first dispatch. `SIGTERM` drains: the broker
 stops accepting work, finishes the in-flight jobs (up to
 `broker.drain_timeout_seconds`) and exits.
 
+### Docker
+
+The image runs the broker and, together with `config/` mounted read-only,
+picks up the in-repo configuration. The compose stack is the documented way
+to run it:
+
+```sh
+cp config/broker.example.yaml config/broker.yaml   # edit to taste
+docker compose up --build
+```
+
+The API answers on `http://127.0.0.1:8791`; the broker reaches EdgeRecord and
+Ollama through `host.docker.internal`. State (the local journal) lives in the
+`horizon-state` volume. A bare `docker run` also works: the image falls back
+to the bundled example configuration when no `config/broker.yaml` is present.
+
 ## Use
 
 ### The OpenAI-compatible way (drop-in)
@@ -211,8 +227,9 @@ curl -s http://127.0.0.1:8791/v1/jobs/0f2c... | python3 -m json.tool
 | `POST /v1/chat/completions` | OpenAI-compatible completion (streaming or not) |
 | `GET /v1/models` | The models the mesh can serve |
 | `POST /v1/jobs` | Submit a job (202 + `job_id`); 429 when the queue is full, 503 while draining |
+| `GET /v1/jobs` | The tracked jobs, newest first (`?limit=`, capped at 1000) |
 | `GET /v1/jobs/{job_id}` | Job status and result |
-| `DELETE /v1/jobs/{job_id}` | Cancel queued or running work |
+| `DELETE /v1/jobs/{job_id}` | Cancel queued or running work; 409 when the job already finished |
 | `GET /v1/nodes` | The fleet view (capabilities, health, load) |
 | `POST /v1/nodes/{node_id}/heartbeat` | HTTP heartbeat fallback |
 | `GET /v1/queue` | Queue occupancy and in-flight counters |
@@ -228,6 +245,7 @@ retries after a timeout cannot double-execute.
 
 ```sh
 horizon-broker-cli nodes
+horizon-broker-cli queue
 horizon-broker-cli job submit --prompt "Map the ingestion pipeline" --tier flex
 horizon-broker-cli job status <job-id>
 horizon-broker-cli job list
@@ -365,6 +383,7 @@ make dev
 make test        # pytest
 make lint        # ruff
 make typecheck   # mypy --strict
+make check       # lint + typecheck + schema drift (the pre-proposal gate)
 make schemas     # regenerate schemas/*.v1.json
 ```
 

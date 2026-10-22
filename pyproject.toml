@@ -17,6 +17,7 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
     "Topic :: System :: Distributed Computing",
 ]
@@ -48,6 +49,9 @@ horizon-broker-cli = "horizon_broker.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["horizon_broker*"]
+
+[tool.setuptools.package-data]
+horizon_broker = ["py.typed"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 from typing import Any
 
-from horizon_broker.contracts.jobs import InferenceJob, InferencePayload
-from horizon_broker.contracts.ledger import LedgerRecord
-from horizon_broker.contracts.nodes import NodeCapability
-from horizon_broker.contracts.recovery import FaultRecoverySnapshot
+# The script must work with the bare interpreter (its whole point is to run
+# before an editable install, e.g. straight from a fresh checkout or inside
+# the schema-drift gate), so the repo root goes on the path explicitly.
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from horizon_broker.contracts.jobs import InferenceJob, InferencePayload  # noqa: E402
+from horizon_broker.contracts.ledger import LedgerRecord  # noqa: E402
+from horizon_broker.contracts.nodes import NodeCapability  # noqa: E402
+from horizon_broker.contracts.recovery import FaultRecoverySnapshot  # noqa: E402
 
 TARGETS: dict[str, Any] = {
     "inference_job": InferenceJob,

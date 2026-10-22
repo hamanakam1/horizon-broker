@@ -1,0 +1,19 @@
+# Keep the build context small and the runtime image clean.
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+tests/
+docs/
+.github/
+var/
+*.jsonl
+Makefile
