@@ -13,6 +13,7 @@ import sys
 from dataclasses import replace
 from typing import Any
 
+from horizon_broker.banner import BANNER
 from horizon_broker.config import load_config
 from horizon_broker.ingress.server import BrokerServer
 from horizon_broker.observability.logging import configure_logging
@@ -40,6 +41,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def print_banner() -> None:
+    """Print the wordmark, but only to a human.
+
+    A piped or logged runtime gets a clean JSON stream from the first byte;
+    the artwork shows exclusively on an interactive terminal.
+    """
+    if sys.stdout.isatty():
+        print(BANNER)
+        print()
+
+
 async def run_server(
     config_path: str | None,
     host: str | None,
@@ -55,6 +67,7 @@ async def run_server(
         overrides["port"] = port
     if overrides:
         config = replace(config, **overrides)
+    print_banner()
     configure_logging(config.log_level)
 
     engine = BrokerEngine(config)
@@ -82,7 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "version":
         from horizon_broker import __version__
 
-        print(__version__)
+        print(BANNER)
+        print(f"horizon-broker {__version__}")
         return 0
     if args.command == "check-config":
         try:

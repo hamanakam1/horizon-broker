@@ -1,10 +1,10 @@
 """Operator command line client.
 
-    horizon-broker job submit --model qwen2.5:7b --prompt "..." --tier flex
-    horizon-broker job status <job-id>
-    horizon-broker job list
-    horizon-broker nodes
-    horizon-broker queue
+    horizon-broker-cli job submit --model qwen2.5:7b --prompt "..." --tier flex
+    horizon-broker-cli job status <job-id>
+    horizon-broker-cli job list
+    horizon-broker-cli nodes
+    horizon-broker-cli health
 
 The client talks to a running broker over its HTTP API. It never touches the
 broker's state directly, so it can be run from another machine.

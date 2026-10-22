@@ -7,6 +7,7 @@ horizon-broker/
 ├── horizon_broker/
 │   ├── __init__.py                 # public package surface
 │   ├── __main__.py                 # CLI: `python -m horizon_broker serve`
+│   ├── banner.py                   # the wordmark (README, version, serve TTY banner)
 │   ├── config.py                   # dataclass config + YAML/env layering
 │   │
 │   ├── contracts/                  # (1) ASYNCHRONOUS DATA CONTRACTS
@@ -18,6 +19,7 @@ horizon-broker/
 │   │
 │   ├── ingress/                    # (2) API INGRESS
 │   │   ├── app.py                  #   aiohttp routes, tier categorisation
+│   │   ├── openai.py               #   OpenAI-compatible chat-completions ingress
 │   │   └── server.py               #   runner lifecycle
 │   │
 │   ├── scheduler/                  # (3) BATCHING & QUEUE ENGINE
@@ -25,8 +27,7 @@ horizon-broker/
 │   │   ├── priority_queue.py       #   deadline-ordered interactive lane, per-model flex lane
 │   │   ├── window.py               #   windowing policy (X seconds, min/max batch)
 │   │   ├── batcher.py              #   batch assembly and per-node grouping
-│   │   ├── dispatch.py             #   router -> supervisor hand-off
-│   │   └── priority_queue.py
+│   │   └── dispatch.py             #   router -> supervisor hand-off
 │   │
 │   ├── routing/                    # (5) PD-DAG ROUTER
 │   │   ├── arithmetic.py           #   arithmetic intensity model (prefill vs decode)
@@ -38,6 +39,7 @@ horizon-broker/
 │   │   ├── connection.py           #   WebSocket control channel + reconnect loop
 │   │   ├── manager.py              #   owns one channel per node
 │   │   ├── watchdog.py             #   silence -> LOST -> recovery
+│   │   ├── probe.py                #   health probe for nodes without a control channel
 │   │   └── executor.py             #   job supervision, checkpoint cadence
 │   │
 │   ├── recovery/                   # (6) STATE RECOVERY / EDGERECORD HOOK

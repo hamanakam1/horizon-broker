@@ -6,6 +6,17 @@
 [![Docker](https://img.shields.io/badge/docker-ready-2496ed)](Dockerfile)
 [![Releases](https://img.shields.io/github/v/release/hamanakam1/horizon-broker)](https://github.com/hamanakam1/horizon-broker/releases)
 
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  _   _  ___  ____  ___ ________  _   _   ____  ____   ___  _  _______ ____   │
+│ | | | |/ _ \|  _ \|_ _|__  / _ \| \ | | | __ )|  _ \ / _ \| |/ / ____|  _ \  │
+│ | |_| | | | | |_) || |  / / | | |  \| | |  _ \| |_) | | | | ' /|  _| | |_) | │
+│ |  _  | |_| |  _ < | | / /| |_| | |\  | | |_) |  _ <| |_| | . \| |___|  _ <  │
+│ |_| |_|\___/|_| \_\___/____\___/|_| \_| |____/|_| \_\\___/|_|\_\_____|_| \_\ │
+│ ················sleep-time compute for a fragile edge fleet················· │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
 **Asynchronous inference queue and fault-tolerance manager for a heterogeneous edge fleet.**
 
 The Horizon Broker intercepts every request bound for the local Ollama/Qwen
@@ -71,6 +82,18 @@ The fleet is also fragile. A Raspberry Pi overheats. A solar trailer hits a
 low-voltage shutdown. The broker treats hardware death as an expected event:
 state is checkpointed to EdgeRecord continuously, and a lost node triggers an
 automatic re-dispatch on a different node inside a 30-second budget.
+
+```text
+                                \   |   /
+                                 \  |  /
+                             ~~~~ ( • ) ~~~~          <- the horizon
+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+                  ┌───────────┐    ┌───────────┐    ┌───────────┐
+                  │   M3 Max  │    │   Pi 5    │    │  Trailer  │
+                  │  prefill  │    │  decode   │    │   solar   │
+                  └───────────┘    └───────────┘    └───────────┘
+                      ~ heartbeat + checkpoint to EdgeRecord ~
+```
 
 ## The four sub-systems
 
