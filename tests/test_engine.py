@@ -64,6 +64,47 @@ def state_of(engine: BrokerEngine, job_id: str) -> str | None:
     return status["state"] if status else None
 
 
+async def test_a_finished_job_cannot_be_cancelled(config: Any) -> None:
+    """A completed job must stay completed; DELETE is only a queued/running verb."""
+    server, url = await start_fake_ollama()
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        assert await wait_for(lambda: state_of(engine, job.job_id) == "completed")
+        assert await engine.cancel(job.job_id) is False
+        assert state_of(engine, job.job_id) == "completed"
+    finally:
+        await engine.stop()
+        await server.close()
+
+
+async def test_a_second_waiter_survives_the_first_timeout(config: Any) -> None:
+    """One caller hitting its timeout must not strand the other waiters.
+
+    The first waiter resolves (and times out) while the job is still
+    running; the second one still receives the result when the job finishes.
+    """
+    server, url = await start_fake_ollama(delay=0.3)
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        impatient = asyncio.create_task(engine.wait_for_result(job.job_id, timeout=0.02))
+        patient = asyncio.create_task(engine.wait_for_result(job.job_id))
+        assert await impatient is None  # times out while the job runs
+        assert state_of(engine, job.job_id) in ("queued", "dispatched", "running")
+        assert await patient == "Hello world"
+        assert state_of(engine, job.job_id) == "completed"
+    finally:
+        await engine.stop()
+        await server.close()
+
+
 async def test_an_interactive_job_is_dispatched_immediately(config: Any) -> None:
     server, url = await start_fake_ollama()
     node = make_node("node-a", ollama_url=url)

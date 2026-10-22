@@ -140,7 +140,7 @@ class BrokerEngine:
 
         self._jobs: dict[str, InferenceJob] = {}
         self._usage: dict[str, tuple[int, int]] = {}
-        self._waiters: dict[str, asyncio.Future[str | None]] = {}
+        self._waiters: dict[str, set[asyncio.Future[str | None]]] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._ollama_clients: dict[str, OllamaClient] = {}
         self._running = False
@@ -247,9 +247,16 @@ class BrokerEngine:
         return job
 
     async def cancel(self, job_id: str) -> bool:
-        """Cancel a queued or running job."""
+        """Cancel a queued or running job.
+
+        Returns False for an unknown job id and for a job that already
+        reached a terminal state: rewriting a finished job into CANCELLED
+        would lie to every future status query.
+        """
         job = self._jobs.get(job_id)
         if job is None:
+            return False
+        if job.state in TERMINAL_STATES:
             return False
         cancelled = await self.supervisor.cancel(job_id)
         if not cancelled:
@@ -262,16 +269,18 @@ class BrokerEngine:
 
         Returns ``None`` when the job failed or the timeout elapsed. The
         OpenAI-compatible ingress uses this to answer a synchronous client.
+
+        Every waiter owns its own future: ``asyncio.wait_for`` cancels the
+        future it times out on, so a shared future would drag every peer
+        waiter down with the one caller whose budget expired.
         """
         job = self._jobs.get(job_id)
         if job is None:
             return None
         if job.state in TERMINAL_STATES:
             return job.result_text
-        future = self._waiters.get(job_id)
-        if future is None:
-            future = asyncio.get_running_loop().create_future()
-            self._waiters[job_id] = future
+        future: asyncio.Future[str | None] = asyncio.get_running_loop().create_future()
+        self._waiters.setdefault(job_id, set()).add(future)
         try:
             if timeout is None:
                 return await future
@@ -279,15 +288,27 @@ class BrokerEngine:
         except TimeoutError:
             return None
         finally:
-            self._waiters.pop(job_id, None)
+            # Discard only this waiter's future (already cancelled on a
+            # timeout); the rest of the set stays resolvable.
+            entry = self._waiters.get(job_id)
+            if entry is not None:
+                entry.discard(future)
+                if not entry:
+                    del self._waiters[job_id]
 
     def _on_job_finished(self, job: InferenceJob, usage: tuple[int, int] | None = None) -> None:
-        """Resolve a waiter when a job reaches a terminal state."""
+        """Resolve the waiters when a job reaches a terminal state.
+
+        Popping the whole set here (not in the waiters) is what keeps the
+        registry bounded: it is the only moment a job can leave the waiting
+        set, whether anyone was watching or not.
+        """
         if usage is not None:
             self._usage[job.job_id] = usage
-        future = self._waiters.get(job.job_id)
-        if future is not None and not future.done():
-            future.set_result(job.result_text)
+        futures = self._waiters.pop(job.job_id, None)
+        for future in futures or ():
+            if not future.done():
+                future.set_result(job.result_text)
 
     def token_usage(self, job_id: str) -> tuple[int, int] | None:
         """The measured (prompt, completion) token counts of a finished job."""
@@ -301,6 +322,25 @@ class BrokerEngine:
         payload = job.model_dump(mode="json")
         payload["assigned_node_id"] = job.assigned_node_id
         return payload
+
+    def list_jobs(self, limit: int = 100) -> dict[str, Any]:
+        """Return the tracked jobs, newest first.
+
+        Operators look for the slow ones and the stuck ones, so the newest
+        submission first is the useful order. ``limit`` bounds one response;
+        the store itself is already bounded by ``MAX_TRACKED_JOBS``.
+        """
+        newest_first = sorted(
+            self._jobs.values(),
+            key=lambda job: job.submitted_at,
+            reverse=True,
+        )
+        sliced = newest_first[: max(0, limit)]
+        return {
+            "total": len(self._jobs),
+            "count": len(sliced),
+            "jobs": [job.model_dump(mode="json") for job in sliced],
+        }
 
     def stats(self) -> dict[str, Any]:
         """Return queue, fleet and in-flight counters."""
