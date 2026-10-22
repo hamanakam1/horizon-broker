@@ -103,6 +103,19 @@ python -m horizon_broker check-config --config config/broker.yaml
 python -m horizon_broker serve --config config/broker.yaml
 ```
 
+### Container image
+
+A published image is built and smoke-tested on every release tag.
+
+```sh
+docker pull ghcr.io/hamanakam1/horizon-broker:0.2.0
+docker run --rm -p 8791:8791 ghcr.io/hamanakam1/horizon-broker:0.2.0
+```
+
+The image runs as a non-root user and keeps its journal on
+`/var/lib/horizon-broker`. See the
+[package on GitHub](https://github.com/hamanakam1/horizon-broker/pkgs/container/horizon-broker).
+
 The broker listens on `127.0.0.1:8791` by default. `check-config` validates
 the file and the fleet before the broker starts, so a broken configuration
 fails loudly instead of at the first dispatch. `SIGTERM` drains: the broker
