@@ -139,6 +139,7 @@ class BrokerEngine:
         )
 
         self._jobs: dict[str, InferenceJob] = {}
+        self._usage: dict[str, tuple[int, int]] = {}
         self._waiters: dict[str, asyncio.Future[str | None]] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._ollama_clients: dict[str, OllamaClient] = {}
@@ -280,11 +281,17 @@ class BrokerEngine:
         finally:
             self._waiters.pop(job_id, None)
 
-    def _on_job_finished(self, job: InferenceJob) -> None:
+    def _on_job_finished(self, job: InferenceJob, usage: tuple[int, int] | None = None) -> None:
         """Resolve a waiter when a job reaches a terminal state."""
+        if usage is not None:
+            self._usage[job.job_id] = usage
         future = self._waiters.get(job.job_id)
         if future is not None and not future.done():
             future.set_result(job.result_text)
+
+    def token_usage(self, job_id: str) -> tuple[int, int] | None:
+        """The measured (prompt, completion) token counts of a finished job."""
+        return self._usage.get(job_id)
 
     def status(self, job_id: str) -> dict[str, Any] | None:
         """Return the JSON view of a job."""
@@ -532,4 +539,5 @@ class BrokerEngine:
         excess = len(self._jobs) - MAX_TRACKED_JOBS
         for job_id in finished[:excess]:
             self._jobs.pop(job_id, None)
+            self._usage.pop(job_id, None)
         LOGGER.info("pruned %d finished job(s) from the job store", min(excess, len(finished)))

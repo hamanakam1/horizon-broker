@@ -204,6 +204,10 @@ chat messages is sent to the engine's chat endpoint so the model's own chat
 template applies. Flattening a conversation by hand would silently change
 the prompt.
 
+The `usage` block reports the token counts the engine actually measured
+(`prompt_eval_count` / `eval_count`), not an estimate; the estimate is only
+used when the engine does not report counts.
+
 ## The node control channel
 
 Frames exchanged over the node WebSocket:

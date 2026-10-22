@@ -44,7 +44,11 @@ MAX_PARTIAL_TOKENS = 512
 RecoverCallback = Callable[[InferenceJob, str, str], Awaitable[RecoveryOutcome]]
 AssignCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 OllamaFactory = Callable[[NodeCapability], OllamaClient]
-FinishedCallback = Callable[[InferenceJob], None]
+FinishedCallback = Callable[[InferenceJob, tuple[int, int] | None], None]
+"""Called when a job reaches a terminal state, with the measured token usage."""
+
+MAX_TRACKED_USAGE = 1_000
+"""How many finished token counts are kept for the usage report."""
 
 
 @dataclass
@@ -58,6 +62,10 @@ class ExecutionContext:
     attempt: int
     phase: ExecutionPhase = ExecutionPhase.MONOLITHIC
     tokens_generated: int = 0
+    prompt_tokens: int | None = None
+    """Prompt tokens the engine actually counted, when it reports them."""
+    completion_tokens: int | None = None
+    """Completion tokens the engine actually counted, when it reports them."""
     last_checkpoint_at: float = 0.0
     last_checkpoint_tokens: int = 0
     kv_cache_state_id: str | None = None
@@ -95,6 +103,7 @@ class JobSupervisor:
         self._on_finished = on_finished
         self._clock = clock
         self._contexts: dict[str, ExecutionContext] = {}
+        self._usage: dict[str, tuple[int, int]] = {}
 
     # -- introspection ------------------------------------------------------
 
@@ -211,6 +220,10 @@ class JobSupervisor:
             async for chunk in client.generate(job.payload):
                 context.chunks.append(chunk.text)
                 context.tokens_generated += 1
+                if chunk.prompt_eval_count is not None:
+                    context.prompt_tokens = chunk.prompt_eval_count
+                if chunk.eval_count is not None:
+                    context.completion_tokens = chunk.eval_count
                 if job.state is JobState.DISPATCHED:
                     job.state = JobState.RUNNING
                 await self._maybe_checkpoint(context)
@@ -433,7 +446,23 @@ class JobSupervisor:
         self.registry.release_job(context.node_id, job.job_id)
         if self._contexts.get(job.job_id) is context:
             self._contexts.pop(job.job_id, None)
-        self._notify_finished(job)
+        usage = self._record_usage(job.job_id, context)
+        self._notify_finished(job, usage)
+
+    def _record_usage(self, job_id: str, context: ExecutionContext) -> tuple[int, int] | None:
+        """Keep the token counts the engine reported, for the usage report."""
+        if context.prompt_tokens is None and context.completion_tokens is None:
+            return None
+        usage = (context.prompt_tokens or 0, context.completion_tokens or 0)
+        if len(self._usage) >= MAX_TRACKED_USAGE:
+            oldest = next(iter(self._usage))
+            self._usage.pop(oldest, None)
+        self._usage[job_id] = usage
+        return usage
+
+    def usage(self, job_id: str) -> tuple[int, int] | None:
+        """The measured (prompt, completion) token counts of a finished job."""
+        return self._usage.get(job_id)
 
     async def _fail(self, context: ExecutionContext, message: str) -> None:
         job = context.job
@@ -444,12 +473,12 @@ class JobSupervisor:
             self._contexts.pop(job.job_id, None)
         self._notify_finished(job)
 
-    def _notify_finished(self, job: InferenceJob) -> None:
+    def _notify_finished(self, job: InferenceJob, usage: tuple[int, int] | None = None) -> None:
         """Tell the engine that the job reached a terminal state."""
         if self._on_finished is None:
             return
         try:
-            self._on_finished(job)
+            self._on_finished(job, usage)
         except Exception as exc:  # noqa: BLE001 - a broken waiter must not fail the job
             LOGGER.warning("completion callback failed for job %s: %s", job.job_id, exc)
 

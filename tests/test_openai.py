@@ -146,6 +146,31 @@ async def test_a_streamed_chat_completion_uses_server_sent_events(config: Any) -
         await server.close()
 
 
+async def test_the_usage_block_reports_the_measured_tokens(config: Any) -> None:
+    """The engine counted the tokens; an estimate would misreport the cost."""
+    server, url = await start_fake_ollama(tokens=("Hello", " there"))
+    client, engine = await make_client(config, url)
+    await engine.start()
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen2.5:7b",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+        assert response.status == 200
+        usage = (await response.json())["usage"]
+        # The fake engine reports prompt_eval_count=8 and eval_count=2.
+        assert usage["prompt_tokens"] == 8
+        assert usage["completion_tokens"] == 2
+        assert usage["total_tokens"] == 10
+    finally:
+        await engine.stop()
+        await client.close()
+        await server.close()
+
+
 async def test_a_broken_request_is_a_422(config: Any) -> None:
     client, engine = await make_client(config, "http://127.0.0.1:1")
     await engine.start()

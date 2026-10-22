@@ -209,6 +209,10 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
 
     prompt_tokens = job.payload.estimated_prompt_tokens
     completion_tokens = max(1, len(text) // 4)
+    measured = engine.token_usage(job.job_id)
+    if measured is not None:
+        # The engine counted the tokens; an estimate would misreport the cost.
+        prompt_tokens, completion_tokens = measured
     if body.get("stream"):
         response = web.StreamResponse(
             status=200, headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"}
