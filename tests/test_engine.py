@@ -224,7 +224,11 @@ async def test_an_interactive_job_is_dispatched_immediately(config: Any) -> None
 async def test_flex_jobs_wait_for_the_window_and_then_run_as_one_batch(config: Any) -> None:
     server, url = await start_fake_ollama(tokens=("tick",))
     node = make_node("node-a", ollama_url=url)
-    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    # The idle flush is a different rule with its own test; here the window
+    # is the only thing that may release the batch, so the assertion about
+    # "windowing" does not race the flush.
+    windowed = replace(config, window=replace(config.window, idle_flush=False))
+    engine = BrokerEngine(replace(windowed, static_nodes=(node,)))
     await engine.start()
     try:
         jobs = [make_job(tier=PriorityTier.FLEX, max_latency_ms=600_000) for _ in range(2)]
