@@ -9,6 +9,7 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY horizon_broker ./horizon_broker
+COPY config ./config
 
 RUN pip install --no-cache-dir .
 
