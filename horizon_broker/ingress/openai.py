@@ -35,6 +35,14 @@ DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_LATENCY_MS = 120_000
 """Default budget for an OpenAI-shaped request without an explicit one."""
 
+DEFAULT_INTERACTIVE_THRESHOLD_MS = 2_000
+"""Latency budget at or below which a request is interactive work.
+
+The native ingress uses ``scheduling.interactive_latency_threshold_ms``;
+the OpenAI ingress uses the same number, so the same work is categorised
+the same way whichever door it came through.
+"""
+
 
 class OpenAITranslationError(ValueError):
     """The request body is not a usable chat-completions request."""
@@ -82,7 +90,11 @@ def _parameters_from(body: dict[str, Any]) -> SamplingParams:
     )
 
 
-def chat_request_to_job(body: dict[str, Any]) -> InferenceJob:
+def chat_request_to_job(
+    body: dict[str, Any],
+    *,
+    interactive_threshold_ms: int = DEFAULT_INTERACTIVE_THRESHOLD_MS,
+) -> InferenceJob:
     """Translate an OpenAI chat-completions request into a broker job."""
     if not isinstance(body, dict):
         raise OpenAITranslationError("the request body must be an object")
@@ -91,11 +103,16 @@ def chat_request_to_job(body: dict[str, Any]) -> InferenceJob:
     if not isinstance(model, str) or not model:
         model = DEFAULT_MODEL
 
-    system = next((m.content for m in messages if m.role == "system"), None)
+    # The system prompt travels in ``payload.system``, which the chat
+    # request inserts at the front. Leaving it in the message list as well
+    # would send it to the engine twice.
+    system_message = next((m for m in messages if m.role == "system"), None)
+    system = system_message.content if system_message is not None else None
+    remaining = [m for m in messages if m is not system_message]
     payload = InferencePayload(
         model=model,
         prompt="",
-        messages=messages,
+        messages=remaining,
         system=system,
         parameters=_parameters_from(body),
         expected_output_tokens=body.get("max_tokens")
@@ -106,8 +123,10 @@ def chat_request_to_job(body: dict[str, Any]) -> InferenceJob:
     tier = body.get("horizon_priority_tier")
     latency = body.get("horizon_max_acceptable_latency_ms")
     if tier not in (PriorityTier.INTERACTIVE.value, PriorityTier.FLEX.value):
-        tier = PriorityTier.FLEX.value if isinstance(latency, int) and latency > 120_000 else (
-            PriorityTier.INTERACTIVE.value
+        tier = (
+            PriorityTier.FLEX.value
+            if isinstance(latency, int) and latency > interactive_threshold_ms
+            else PriorityTier.INTERACTIVE.value
         )
     if not isinstance(latency, int) or latency <= 0:
         latency = DEFAULT_LATENCY_MS

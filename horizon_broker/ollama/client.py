@@ -111,7 +111,13 @@ class OllamaClient:
             body = payload.to_engine_request(model_override=model)
             endpoint = "/api/generate"
         body["keep_alive"] = self.keep_alive
-        timeout = aiohttp.ClientTimeout(total=None)
+        # The configured budget bounds the whole generation; without it a
+        # stalled engine would keep the job alive for ever.
+        timeout = aiohttp.ClientTimeout(
+            total=self.timeout_seconds,
+            sock_connect=self.timeout_seconds,
+            sock_read=self.timeout_seconds,
+        )
         async with session.post(
             f"{self.base_url}{endpoint}", json=body, timeout=timeout
         ) as response:

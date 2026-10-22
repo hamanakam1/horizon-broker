@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -14,6 +15,7 @@ from aiohttp.test_utils import TestServer
 from horizon_broker.contracts.errors import BrokerDrainingError, QueueFullError
 from horizon_broker.contracts.jobs import PriorityTier
 from horizon_broker.contracts.nodes import PowerClass
+from horizon_broker.contracts.recovery import utcnow
 from horizon_broker.scheduler.engine import BrokerEngine
 from tests.conftest import make_job, make_node, wait_for
 
@@ -87,6 +89,8 @@ async def test_an_expired_job_releases_its_waiter(config: Any) -> None:
     await engine.start()
     try:
         job = make_job(tier=PriorityTier.INTERACTIVE, max_latency_ms=1)
+        # The budget elapsed before the scheduler ever looked at the job.
+        job.deadline_at = utcnow() - timedelta(seconds=1)
         await engine.submit(job)
         waiter = asyncio.create_task(engine.wait_for_result(job.job_id))
         assert await asyncio.wait_for(waiter, timeout=2.0) is None
@@ -123,6 +127,31 @@ async def test_the_failure_counter_moves(config: Any) -> None:
         assert engine.metrics.counter("horizon_jobs_failed_total") == 1
     finally:
         await engine.stop(drain=False)
+
+
+async def test_an_interactive_job_starts_without_waiting_for_the_poll_tick(config: Any) -> None:
+    """The queue raises its wakeup event; the lane must not sit on a timer.
+
+    An interactive caller pays for every millisecond of poll latency, and
+    the poll interval is a fallback, not a schedule.
+    """
+    slow_poll = replace(
+        config,
+        scheduling=replace(config.scheduling, poll_interval_seconds=5.0),
+    )
+    server, url = await start_fake_ollama()
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(slow_poll, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        assert await wait_for(
+            lambda: state_of(engine, job.job_id) == "completed", timeout=2.0
+        )
+    finally:
+        await engine.stop()
+        await server.close()
 
 
 async def test_a_finished_job_cannot_be_cancelled(config: Any) -> None:

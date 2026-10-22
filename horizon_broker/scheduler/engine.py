@@ -495,7 +495,7 @@ class BrokerEngine:
                         self._inflight_interactive += 1
                         asyncio.create_task(self._run_interactive(job))
                         continue
-                await asyncio.sleep(self.config.scheduling.poll_interval_seconds)
+                await self._wait_for_work(self.config.scheduling.poll_interval_seconds)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -518,12 +518,27 @@ class BrokerEngine:
                         asyncio.create_task(self._run_flex(batch))
                     if batches:
                         continue
-                await asyncio.sleep(self.config.scheduling.poll_interval_seconds)
+                await self._wait_for_work(self.config.scheduling.poll_interval_seconds)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("flex loop error: %s", exc)
                 await asyncio.sleep(self.config.scheduling.poll_interval_seconds)
+
+    async def _wait_for_work(self, timeout: float) -> None:
+        """Wait until the queue raises its wakeup event, or the interval ends.
+
+        The event is the fast path: an interactive caller must not pay the
+        poll interval for work that is already waiting. The interval stays
+        the safety net for the time-based conditions (windows, deadlines)
+        that no event announces.
+        """
+        try:
+            await asyncio.wait_for(self.queue.wakeup.wait(), timeout=timeout)
+        except TimeoutError:
+            return
+        finally:
+            self.queue.wakeup.clear()
 
     async def _run_interactive(self, job: InferenceJob) -> None:
         try:

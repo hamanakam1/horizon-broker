@@ -210,7 +210,10 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     except Exception:  # noqa: BLE001
         return JSON({"error": {"message": "body must be valid JSON"}}, status=400)
     try:
-        job = chat_request_to_job(body)
+        job = chat_request_to_job(
+            body,
+            interactive_threshold_ms=config.scheduling.interactive_latency_threshold_ms,
+        )
     except OpenAITranslationError as exc:
         return JSON({"error": {"message": str(exc)}}, status=422)
 

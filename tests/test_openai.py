@@ -8,6 +8,7 @@ from typing import Any
 
 from aiohttp.test_utils import TestClient, TestServer
 
+from horizon_broker.contracts.jobs import PriorityTier
 from horizon_broker.ingress.app import create_app
 from horizon_broker.ingress.openai import OpenAITranslationError, chat_request_to_job
 from horizon_broker.scheduler.engine import BrokerEngine
@@ -41,7 +42,10 @@ def test_a_chat_request_becomes_a_job() -> None:
     assert job.payload.parameters.num_predict == 128
     assert job.payload.parameters.temperature == 0.2
     assert job.payload.system == "be brief"
-    assert len(job.payload.messages) == 2
+    # The system prompt travels in ``payload.system`` only; the message
+    # list keeps the conversation.
+    assert len(job.payload.messages) == 1
+    assert job.payload.messages[0].role == "user"
     assert job.payload.estimated_prompt_tokens > 0
 
 
@@ -86,6 +90,57 @@ def test_a_stop_string_becomes_a_tuple() -> None:
         }
     )
     assert job.payload.parameters.stop == ("END", "STOP")
+
+
+def test_the_tier_follows_the_configured_latency_threshold() -> None:
+    """The OpenAI ingress and the native ingress must agree on the tier.
+
+    The native path uses ``scheduling.interactive_latency_threshold_ms``;
+    the OpenAI path used a hard-coded 120 s, so the same work was
+    categorised differently depending on the door it came through.
+    """
+    body = {
+        "model": "qwen2.5:7b",
+        "messages": [{"role": "user", "content": "scan the repo"}],
+        "horizon_max_acceptable_latency_ms": 60_000,
+    }
+    strict = chat_request_to_job(body, interactive_threshold_ms=2_000)
+    assert strict.priority_tier is PriorityTier.FLEX
+
+    lenient = chat_request_to_job(body, interactive_threshold_ms=120_000)
+    assert lenient.priority_tier is PriorityTier.INTERACTIVE
+
+
+def test_the_system_prompt_is_sent_once() -> None:
+    """The system message must not reach the engine twice.
+
+    It is carried in ``payload.system`` and inserted at the front of the
+    chat request, so leaving it in the message list sends it twice.
+    """
+    body = {
+        "model": "qwen2.5:7b",
+        "messages": [
+            {"role": "system", "content": "be brief"},
+            {"role": "user", "content": "scan the repo"},
+        ],
+    }
+    job = chat_request_to_job(body)
+    request = job.payload.to_chat_request()
+    system_messages = [m for m in request["messages"] if m["role"] == "system"]
+    assert len(system_messages) == 1
+    assert system_messages[0]["content"] == "be brief"
+    assert [m["role"] for m in request["messages"]] == ["system", "user"]
+
+
+def test_a_request_without_a_system_message_is_untouched() -> None:
+    body = {
+        "model": "qwen2.5:7b",
+        "messages": [{"role": "user", "content": "scan the repo"}],
+    }
+    job = chat_request_to_job(body)
+    request = job.payload.to_chat_request()
+    assert [m["role"] for m in request["messages"]] == ["user"]
+    assert job.payload.system is None
 
 
 async def test_a_chat_completion_is_answered(config: Any) -> None:

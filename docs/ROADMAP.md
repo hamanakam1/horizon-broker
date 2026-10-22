@@ -129,13 +129,13 @@ real work. Throughput is what makes the fleet worth owning.
 | --- | --- | --- | --- |
 | 1.1 | Send a real batch to the engine | `scheduler/batcher.py:4`, `scheduler/engine.py:401` | today "batching" is a grouping that changes the order of N single-prompt requests; the MFU argument only holds if the weight load is amortised across one call |
 | 1.2 | Stream token by token | `ingress/app.py:216` | the whole result is buffered and emitted as one content delta; `stream: true` is not streaming |
-| 1.3 | Honour `ollama.timeout_seconds` | `ollama/client.py:114` | `ClientTimeout(total=None)` disables the configured 600 s budget for the whole generation |
-| 1.4 | One HTTP session for the whole broker | `scheduler/engine.py:70` | the injected session reaches only the ledger client; the connection manager, the probe and the Ollama clients each open their own pool |
-| 1.5 | Wake the queue instead of polling it | `scheduler/priority_queue.py:70` | the interactive lane pays up to 250 ms of poll latency on every request; the `wakeup` event exists and is never awaited |
-| 1.6 | Rebuild the queue from the journal after a restart | `recovery/snapshot_store.py:136`, `docs/RUNBOOK.md:139` | the runbook promises this; the code path is unreachable, so a broker restart loses queued work |
-| 1.7 | Ship a real EdgeRecord adapter | `recovery/ledger.py:36` | the ledger port is a generic HTTP shim that accepts four different response shapes; a real client removes the guesswork and makes the hash verification meaningful |
-| 1.8 | Make the OpenAI ingress agree with the native ingress | `ingress/openai.py:108` | the OpenAI path hard-codes a 120 s tier threshold while the native path uses `scheduling.interactive_latency_threshold_ms` (2 s) |
-| 1.9 | Stop duplicating the system prompt | `ingress/openai.py:94`, `contracts/jobs.py:172` | the system message is copied into `payload.system` and left in `payload.messages`, so it is sent twice |
+| 1.3 | Honour `ollama.timeout_seconds` | `ollama/client.py` | **done** — the configured budget bounds the generation instead of `ClientTimeout(total=None)` |
+| 1.4 | One HTTP session for the whole broker | `scheduler/engine.py` | open — the connection manager, the probe and the Ollama clients each open their own pool |
+| 1.5 | Wake the queue instead of polling it | `scheduler/engine.py`, `scheduler/priority_queue.py` | **done** — the lanes await the queue's wakeup event; the poll interval stays the fallback for time-based conditions |
+| 1.6 | Rebuild the queue from the journal after a restart | `recovery/snapshot_store.py`, `docs/RUNBOOK.md` | **done** — a cold start replays every non-terminal job |
+| 1.7 | Ship a real EdgeRecord adapter | `recovery/ledger.py` | open — the ledger port is a generic HTTP shim that accepts four different response shapes |
+| 1.8 | Make the OpenAI ingress agree with the native ingress | `ingress/openai.py`, `ingress/app.py` | **done** — both use `scheduling.interactive_latency_threshold_ms` |
+| 1.9 | Stop duplicating the system prompt | `ingress/openai.py` | **done** — the system message travels in `payload.system` only |
 | 1.10 | Enforce the per-node batch limit end to end | `nodes/registry.py:94` | `max_batch_size` is tracked per node but never consulted when a Flex batch is grouped |
 
 **Gate B — measured evidence from a soak.**
