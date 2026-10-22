@@ -31,7 +31,7 @@ dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.21",
     "mypy>=1.8",
-    "ruff>=0.1.0",
+    "ruff>=0.3",
     "types-PyYAML>=6.0",
 ]
 
@@ -58,8 +58,17 @@ exclude = ["tests/"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]
 ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+# Pin the import grouping. Ruff otherwise guesses whether the package is
+# first-party from how it is installed, which differs between a local checkout
+# and an editable install - the same code then lints differently in CI than on
+# the desk.
+known-first-party = ["horizon_broker", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
