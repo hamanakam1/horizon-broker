@@ -37,15 +37,19 @@ class BrokerServer:
             self.config.port,
         )
 
-    async def stop(self) -> None:
-        """Stop the HTTP listener and the engine."""
+    async def stop(self, *, drain: bool = True) -> None:
+        """Stop the HTTP listener and the engine.
+
+        With ``drain`` the engine finishes its in-flight jobs first; the
+        listener is stopped before that so no new work arrives.
+        """
         if self._site is not None:
             await self._site.stop()
             self._site = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
-        await self.engine.stop()
+        await self.engine.stop(drain=drain)
 
     @property
     def url(self) -> str:

@@ -164,6 +164,25 @@ The envelope the broker writes to EdgeRecord. `LedgerRecord.payload` holds the
 snapshot body; `content_hash` guards the payload; `LedgerCommitReceipt` is the
 proof of a durable commit.
 
+## The node control channel
+
+Frames exchanged over the node WebSocket:
+
+| Frame | Direction | Payload |
+| --- | --- | --- |
+| `ping` | broker → node | liveness probe |
+| `heartbeat` | node → broker | capability snapshot, power headroom |
+| `assign` | broker → node | the job envelope, `phase` (`prefill`, `decode`, `monolithic`), `resume_point`, `kv_cache_state_id` |
+| `progress` | node → broker | `job_id`, `tokens_generated`, optional text |
+| `checkpoint` | node → broker | `job_id`, `step`, `partial_tokens`, `kv_cache_ref` |
+| `complete` | node → broker | `job_id`, `text`, and for a prefill phase `kv_cache_ref` |
+| `cancel` | broker → node | `job_id` |
+| `draining` | node → broker | the node is about to lose power |
+
+A frame without a `job_id` is attributed to the node's only active job; when
+the node runs more than one job the frame is ignored and logged, because
+guessing would corrupt the wrong job.
+
 ## The EdgeRecord HTTP port
 
 The broker does not depend on EdgeRecord internals; it depends on this narrow

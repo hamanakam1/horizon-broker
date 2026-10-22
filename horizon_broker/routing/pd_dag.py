@@ -16,9 +16,10 @@ the decode phase.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
+from horizon_broker.config import RoutingConfig
 from horizon_broker.contracts.errors import NoCapacityError
 from horizon_broker.contracts.jobs import InferenceJob, PriorityTier
 from horizon_broker.contracts.nodes import NodeCapability, NodeRole
@@ -26,6 +27,7 @@ from horizon_broker.routing.arithmetic import (
     ArithmeticProfile,
     ComputePhase,
     ModelProfile,
+    RoutingThresholds,
     analyse,
     profile_for,
 )
@@ -63,8 +65,26 @@ class RoutingDecision:
 class PDDagRouter:
     """Routes jobs to nodes based on arithmetic intensity."""
 
-    def __init__(self, selector: NodeSelector | None = None) -> None:
+    def __init__(
+        self,
+        selector: NodeSelector | None = None,
+        config: RoutingConfig | None = None,
+    ) -> None:
         self.selector = selector or NodeSelector()
+        self.config = config or RoutingConfig()
+        self.thresholds = RoutingThresholds(
+            prefill_prompt_threshold=self.config.prefill_prompt_threshold,
+            decode_output_threshold=self.config.decode_output_threshold,
+            prefill_ratio=self.config.prefill_intensity_ratio,
+            decode_ratio=self.config.decode_intensity_ratio,
+        )
+
+    def _model_profile(self, model: str) -> ModelProfile:
+        """Return the model profile, honouring the configured KV handoff list."""
+        profile = profile_for(model)
+        if model in self.config.kv_handoff_models and not profile.supports_kv_handoff:
+            profile = replace(profile, supports_kv_handoff=True)
+        return profile
 
     def route(
         self,
@@ -78,8 +98,10 @@ class PDDagRouter:
         Raises :class:`NoCapacityError` when no node can accept the job; the
         scheduler responds by leaving the job in the queue.
         """
-        profile = analyse(job.payload)
-        model_profile = profile_for(job.payload.model)
+        profile = analyse(job.payload, thresholds=self.thresholds)
+        model_profile = self._model_profile(job.payload.model)
+        if model_profile.supports_kv_handoff:
+            profile = replace(profile, supports_kv_handoff=True)
         flex = job.priority_tier is PriorityTier.FLEX
 
         if profile.phase is ComputePhase.PREFILL_BOUND:
@@ -234,7 +256,7 @@ class PDDagRouter:
         excluded: frozenset[str],
     ) -> bool:
         """A split needs a long decode phase, KV handoff support and both node types."""
-        if not model_profile.supports_kv_handoff:
+        if not profile.supports_kv_handoff:
             return False
         if profile.output_tokens < 1_024:
             return False

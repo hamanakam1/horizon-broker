@@ -50,9 +50,23 @@ class MetricsRegistry:
         with self._lock:
             self._histograms[_key(name, labels)].append(value)
 
-    def counter(self, name: str) -> float:
+    def counter(self, name: str, **labels: Any) -> float:
+        """Read a counter.
+
+        Without labels the values of every label combination are summed; with
+        labels only the combinations that carry all of them are summed.
+        """
         with self._lock:
-            return sum(value for key, value in self._counters.items() if key.split("{")[0] == name)
+            if not labels:
+                return sum(value for key, value in self._counters.items() if key.split("{")[0] == name)
+            total = 0.0
+            for key, value in self._counters.items():
+                metric_name, metric_labels = _parse_key(key)
+                if metric_name != name:
+                    continue
+                if all(metric_labels.get(label) == expected for label, expected in labels.items()):
+                    total += value
+            return total
 
     def histogram(self, name: str) -> list[float]:
         with self._lock:
@@ -114,3 +128,17 @@ def _split(key: str) -> tuple[str, str]:
         name, _, rest = key.partition("{")
         return name, "{" + rest
     return key, ""
+
+
+def _parse_key(key: str) -> tuple[str, dict[str, str]]:
+    """Split a metric key into its name and its label mapping."""
+    name, label_text = _split(key)
+    if not label_text:
+        return name, {}
+    labels: dict[str, str] = {}
+    for pair in label_text.strip("{}").split(","):
+        if not pair:
+            continue
+        key_name, _, value = pair.partition("=")
+        labels[key_name.strip()] = value.strip().strip('"')
+    return name, labels

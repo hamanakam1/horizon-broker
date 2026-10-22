@@ -29,6 +29,10 @@ class WindowPolicy:
     min_batch_size: int = 4
     max_batch_size: int = 32
     min_dwell_seconds: float = 5.0
+    idle_flush: bool = True
+    """Flush the window early when the whole fleet is idle."""
+    idle_flush_seconds: float = 2.0
+    """How long the fleet must be idle before an early flush is allowed."""
 
     @classmethod
     def from_config(cls, config: WindowConfig) -> WindowPolicy:
@@ -37,6 +41,8 @@ class WindowPolicy:
             min_batch_size=config.min_batch_size,
             max_batch_size=config.max_batch_size,
             min_dwell_seconds=config.min_dwell_seconds,
+            idle_flush=config.idle_flush,
+            idle_flush_seconds=config.idle_flush_seconds,
         )
 
 
@@ -93,8 +99,14 @@ def evaluate_window(
     pending: int,
     policy: WindowPolicy,
     now: float,
+    fleet_idle: bool = False,
 ) -> WindowDecision:
-    """Decide whether an open window should be closed and dispatched."""
+    """Decide whether an open window should be closed and dispatched.
+
+    ``fleet_idle`` short-circuits the batching delay: holding work back only
+    pays off when something else can share the weight load. When the fleet has
+    nothing else to do, the batch goes out early.
+    """
     if pending <= 0:
         return WindowDecision(False, "empty", window)
     if pending >= policy.max_batch_size:
@@ -103,4 +115,10 @@ def evaluate_window(
         return WindowDecision(True, "window_expired", window)
     if pending >= policy.min_batch_size and window.dwell_elapsed(now, policy.min_dwell_seconds):
         return WindowDecision(True, "min_batch_reached", window)
+    if (
+        policy.idle_flush
+        and fleet_idle
+        and (now - window.opened_at) >= policy.idle_flush_seconds
+    ):
+        return WindowDecision(True, "fleet_idle", window)
     return WindowDecision(False, "holding", window)

@@ -10,6 +10,7 @@ broker:
   port: 8791
   log_level: INFO
   journal_path: ./var/horizon-broker/journal.jsonl
+  drain_timeout_seconds: 30
 
 heartbeat:
   interval_seconds: 2.0
@@ -23,6 +24,10 @@ window:
   min_batch_size: 4
   max_batch_size: 32
   min_dwell_seconds: 5.0
+  # Dispatch a Flex batch early when the whole fleet is idle: holding work
+  # back only pays off when something else can share the weight load.
+  idle_flush: true
+  idle_flush_seconds: 2.0
   power_headroom_threshold: 0.25
   power_gated_tiers:
     - solar_trailer
@@ -33,6 +38,18 @@ scheduling:
   flex_concurrency: 8
   interactive_latency_threshold_ms: 2000
   poll_interval_seconds: 0.25
+  # Ingress backpressure: new work is refused above this queue depth.
+  max_queue_depth: 10000
+
+routing:
+  # Models whose engine can hand a KV cache to another node. Ollama cannot,
+  # so the prefill/decode split stays off until an engine that supports it is
+  # named here.
+  kv_handoff_models: []
+  prefill_prompt_threshold: 4096
+  decode_output_threshold: 2048
+  prefill_intensity_ratio: 4.0
+  decode_intensity_ratio: 0.25
 
 recovery:
   max_attempts: 3

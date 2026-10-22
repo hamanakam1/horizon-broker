@@ -30,6 +30,7 @@ from horizon_broker.contracts.nodes import ExecutionMode, NodeCapability
 from horizon_broker.contracts.recovery import FaultRecoverySnapshot, PartialToken, ResumePoint
 from horizon_broker.nodes.connection import NodeEvent, NodeEventType
 from horizon_broker.nodes.registry import NodeRegistry
+from horizon_broker.observability.metrics import MetricsRegistry
 from horizon_broker.ollama.client import OllamaClient
 from horizon_broker.recovery.recovery import RecoveryOutcome
 from horizon_broker.recovery.snapshot_store import SnapshotStore
@@ -79,6 +80,7 @@ class JobSupervisor:
         ollama_factory: OllamaFactory | None = None,
         assign: AssignCallback | None = None,
         recover: RecoverCallback | None = None,
+        metrics: MetricsRegistry | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.registry = registry
@@ -87,6 +89,7 @@ class JobSupervisor:
         self._ollama_factory = ollama_factory
         self._assign = assign
         self._recover = recover
+        self.metrics = metrics or MetricsRegistry()
         self._clock = clock
         self._contexts: dict[str, ExecutionContext] = {}
 
@@ -114,7 +117,6 @@ class JobSupervisor:
             node_id=node.node_id,
             started_at=self._clock(),
             attempt=job.attempt,
-            phase=ExecutionPhase.DECODE if decision.is_split else ExecutionPhase.MONOLITHIC,
             kv_cache_state_id=job.kv_cache_state_id,
         )
         self._contexts[job.job_id] = context
@@ -122,24 +124,78 @@ class JobSupervisor:
         job.assigned_node_id = node.node_id
         self.registry.assign_job(node.node_id, job.job_id)
 
+        if decision.is_split and self._split_is_executable(decision):
+            context.phase = ExecutionPhase.PREFILL
+            job.phase = ExecutionPhase.PREFILL
+            prefill_node_id = decision.prefill_node_id or decision.primary_node_id
+            await self._start_phase(context, prefill_node_id, ExecutionPhase.PREFILL)
+            return context
+
+        if decision.is_split:
+            LOGGER.warning(
+                "job %s wants a prefill/decode split but the engine cannot hand a KV cache; "
+                "running it whole on %s",
+                job.job_id,
+                node.node_id,
+            )
+            self.metrics.incr("horizon_splits_degraded_total")
+        context.phase = ExecutionPhase.MONOLITHIC
+        job.phase = ExecutionPhase.MONOLITHIC
+        await self._start_phase(context, node.node_id, ExecutionPhase.MONOLITHIC)
+        return context
+
+    def _split_is_executable(self, decision: RoutingDecision) -> bool:
+        """True when the split can actually run.
+
+        The prefill phase must end in a KV-cache reference that the decode
+        node can consume, which only an agent container can provide: a direct
+        Ollama endpoint has no KV export.
+        """
+        if not decision.profile.supports_kv_handoff:
+            return False
+        if not decision.prefill_node_id or not decision.decode_node_id:
+            return False
+        for node_id in (decision.prefill_node_id, decision.decode_node_id):
+            node = self.registry.get(node_id)
+            if node is None or node.execution_mode is not ExecutionMode.AGENT_CONTAINER:
+                return False
+        return True
+
+    async def _start_phase(
+        self,
+        context: ExecutionContext,
+        node_id: str,
+        phase: ExecutionPhase,
+    ) -> None:
+        """Run one phase of a job on one node."""
+        node = self.registry.get(node_id)
+        if node is None:
+            raise KeyError(f"node {node_id} is not registered")
+        context.node_id = node_id
+        context.phase = phase
+        context.job.phase = phase
+        context.job.assigned_node_id = node_id
+        self.registry.assign_job(node_id, context.job.job_id)
+
         if node.execution_mode is ExecutionMode.AGENT_CONTAINER:
             if self._assign is None:
                 raise RuntimeError("no assignment callback configured for agent containers")
             await self._assign(
-                node.node_id,
+                node_id,
                 {
                     "type": "assign",
-                    "job": job.model_dump(mode="json"),
-                    "phase": context.phase.value,
+                    "job": context.job.model_dump(mode="json"),
+                    "phase": phase.value,
                     "resume_point": (
-                        job.resume_point.model_dump(mode="json") if job.resume_point else None
+                        context.job.resume_point.model_dump(mode="json")
+                        if context.job.resume_point
+                        else None
                     ),
-                    "kv_cache_state_id": job.kv_cache_state_id,
+                    "kv_cache_state_id": context.kv_cache_state_id,
                 },
             )
         else:
             context.task = asyncio.create_task(self._run_ollama(context, node))
-        return context
 
     async def _run_ollama(self, context: ExecutionContext, node: NodeCapability) -> None:
         """Stream a generation from an Ollama endpoint and checkpoint as it runs."""
@@ -182,8 +238,26 @@ class JobSupervisor:
             self.registry.mark_health(event.node_id, event.data.get("health", "draining"))
             return
 
-        job_id = str(event.data.get("job_id", ""))
-        context = self._contexts.get(job_id)
+        job_id = event.data.get("job_id")
+        context: ExecutionContext | None = None
+        if isinstance(job_id, str) and job_id:
+            context = self._contexts.get(job_id)
+        else:
+            # A node that forgets the job id must not hang the job: when it
+            # owns exactly one job, the frame is unambiguous.
+            candidates = [
+                ctx for ctx in self._contexts.values() if ctx.node_id == event.node_id
+            ]
+            if len(candidates) == 1:
+                context = candidates[0]
+            elif candidates:
+                LOGGER.warning(
+                    "node %s sent a %s frame without a job id while running %d jobs; ignoring",
+                    event.node_id,
+                    event.type.value,
+                    len(candidates),
+                )
+                return
         if context is None:
             return
 
@@ -202,6 +276,9 @@ class JobSupervisor:
             text = event.data.get("text")
             if isinstance(text, str) and text:
                 context.chunks.append(text)
+            if context.phase is ExecutionPhase.PREFILL:
+                await self._handoff_to_decode(context, event.data)
+                return
             await self._complete(context, context.text)
         elif event.type is NodeEventType.ERROR:
             await self._fail(context, str(event.data.get("error", "node reported an error")))
@@ -302,6 +379,47 @@ class JobSupervisor:
         context.chunks = [token.text for token in tokens]
         await self._commit_snapshot(context)
 
+    async def _handoff_to_decode(self, context: ExecutionContext, data: dict[str, Any]) -> None:
+        """Move a finished prefill phase to the decode node.
+
+        The prefill node reports the KV-cache reference it produced; the
+        decode node consumes it. When no reference comes back the split
+        cannot be honoured and the job is re-run whole on the decode node.
+        """
+        decision = context.decision
+        decode_node_id = decision.decode_node_id
+        kv_ref = data.get("kv_cache_ref") or data.get("kv_cache_state_id")
+        if not isinstance(kv_ref, str) or not kv_ref:
+            LOGGER.error(
+                "prefill phase of job %s finished without a KV cache reference; "
+                "falling back to a whole-job run",
+                context.job.job_id,
+            )
+            self.metrics.incr("horizon_splits_degraded_total")
+            if decode_node_id is None:
+                await self._fail(context, "prefill phase produced no KV cache reference")
+                return
+            self.registry.release_job(context.node_id, context.job.job_id)
+            context.chunks = []
+            await self._start_phase(context, decode_node_id, ExecutionPhase.MONOLITHIC)
+            return
+
+        context.kv_cache_state_id = kv_ref
+        context.job.kv_cache_state_id = kv_ref
+        self.registry.release_job(context.node_id, context.job.job_id)
+        if decode_node_id is None:
+            await self._fail(context, "split decision has no decode node")
+            return
+        LOGGER.info(
+            "job %s: prefill on %s produced %s, handing over to %s",
+            context.job.job_id,
+            context.node_id,
+            kv_ref,
+            decode_node_id,
+        )
+        self.metrics.incr("horizon_splits_handed_off_total")
+        await self._start_phase(context, decode_node_id, ExecutionPhase.DECODE)
+
     # -- completion and failure ---------------------------------------------
 
     async def _complete(self, context: ExecutionContext, text: str) -> None:
@@ -355,7 +473,18 @@ class JobSupervisor:
             return False
         if context.task is not None:
             context.task.cancel()
+        node = self.registry.get(context.node_id)
+        if (
+            node is not None
+            and node.execution_mode is ExecutionMode.AGENT_CONTAINER
+            and self._assign is not None
+        ):
+            try:
+                await self._assign(node.node_id, {"type": "cancel", "job_id": job_id})
+            except Exception as exc:  # noqa: BLE001 - the local state is cancelled anyway
+                LOGGER.warning("could not send cancel frame to node %s: %s", node.node_id, exc)
         context.job.state = JobState.CANCELLED
         self.registry.release_job(context.node_id, job_id)
-        self._contexts.pop(job_id, None)
+        if self._contexts.get(job_id) is context:
+            self._contexts.pop(job_id, None)
         return True

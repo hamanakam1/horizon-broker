@@ -7,9 +7,11 @@ import json
 from dataclasses import replace
 from typing import Any
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
+from horizon_broker.contracts.errors import BrokerDrainingError, QueueFullError
 from horizon_broker.contracts.jobs import PriorityTier
 from horizon_broker.contracts.nodes import PowerClass
 from horizon_broker.scheduler.engine import BrokerEngine
@@ -142,3 +144,88 @@ async def test_the_queue_reports_its_occupancy(config: Any) -> None:
         assert stats["nodes"]["healthy"] == 1
     finally:
         await engine.stop()
+
+
+async def test_an_idle_fleet_flushes_the_window_early(config: Any) -> None:
+    """A single Flex job must not wait for a batch that will never arrive."""
+    server, url = await start_fake_ollama(tokens=("tick",))
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.FLEX, max_latency_ms=600_000)
+        await engine.submit(job)
+        assert await wait_for(lambda: state_of(engine, job.job_id) == "completed")
+        assert engine.metrics.counter("horizon_flex_batches_total", reason="fleet_idle") >= 1
+    finally:
+        await engine.stop()
+        await server.close()
+
+
+async def test_a_duplicate_submission_does_not_restart_the_work(config: Any) -> None:
+    server, url = await start_fake_ollama(tokens=("tick",))
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.FLEX, max_latency_ms=600_000)
+        first = await engine.submit(job)
+        second = await engine.submit(job)
+        assert first is second
+        assert engine.metrics.counter("horizon_jobs_duplicate_total") == 1
+        assert engine.queue.stats().flex <= 1
+    finally:
+        await engine.stop()
+        await server.close()
+
+
+async def test_the_queue_depth_is_enforced(config: Any) -> None:
+    node = make_node("node-a")
+    limited = replace(
+        config,
+        static_nodes=(node,),
+        scheduling=replace(config.scheduling, max_queue_depth=1),
+    )
+    engine = BrokerEngine(limited)
+    await engine.start()
+    try:
+        await engine.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=600_000))
+        with pytest.raises(QueueFullError):
+            await engine.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=600_000))
+    finally:
+        await engine.stop()
+
+
+async def test_a_draining_broker_refuses_new_work(config: Any) -> None:
+    server, url = await start_fake_ollama(tokens=("tick",), delay=0.4)
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        draining = asyncio.create_task(engine.drain(timeout=5.0))
+        await asyncio.sleep(0.05)
+        assert engine.stats()["draining"] is True
+        with pytest.raises(BrokerDrainingError):
+            await engine.submit(make_job(tier=PriorityTier.INTERACTIVE))
+        assert await draining
+    finally:
+        await engine.stop()
+        await server.close()
+
+
+async def test_a_drain_waits_for_the_running_job(config: Any) -> None:
+    server, url = await start_fake_ollama(tokens=("slow",), delay=0.3)
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        assert await wait_for(lambda: bool(engine.registry.jobs_on("node-a")))
+        assert await engine.drain(timeout=5.0)
+        assert state_of(engine, job.job_id) == "completed"
+    finally:
+        await engine.stop()
+        await server.close()

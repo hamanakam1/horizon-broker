@@ -144,3 +144,62 @@ async def test_a_node_can_announce_itself_over_http(config: Any) -> None:
         assert node.last_heartbeat_at is not None
     finally:
         await client.close()
+
+
+async def test_a_full_queue_returns_429(config: Any) -> None:
+    limited = replace(
+        config,
+        scheduling=replace(config.scheduling, max_queue_depth=1),
+    )
+    client, _ = await make_client(limited)
+    try:
+        body = {
+            "payload": {"model": "qwen2.5:7b", "prompt": "scan"},
+            "max_acceptable_latency_ms": 600_000,
+        }
+        first = await client.post("/v1/jobs", json=body)
+        assert first.status == 202
+        second = await client.post("/v1/jobs", json=body)
+        assert second.status == 429
+        assert (await second.json())["error"] == "queue full"
+    finally:
+        await client.close()
+
+
+async def test_a_draining_broker_returns_503(config: Any) -> None:
+    client, engine = await make_client(config)
+    try:
+        await engine.drain(timeout=0.1)
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "payload": {"model": "qwen2.5:7b", "prompt": "scan"},
+                "max_acceptable_latency_ms": 600_000,
+            },
+        )
+        assert response.status == 503
+        assert (await response.json())["error"] == "broker draining"
+
+        ready = await client.get("/readyz")
+        assert ready.status == 503
+        assert (await ready.json())["status"] == "draining"
+    finally:
+        await client.close()
+
+
+async def test_a_duplicate_job_id_returns_the_original_job(config: Any) -> None:
+    client, engine = await make_client(config)
+    try:
+        body = {
+            "job_id": "fixed-job-id",
+            "payload": {"model": "qwen2.5:7b", "prompt": "scan"},
+            "max_acceptable_latency_ms": 600_000,
+        }
+        first = await client.post("/v1/jobs", json=body)
+        second = await client.post("/v1/jobs", json=body)
+        assert first.status == 202
+        assert second.status == 202
+        assert (await first.json())["job_id"] == (await second.json())["job_id"]
+        assert engine.metrics.counter("horizon_jobs_duplicate_total") == 1
+    finally:
+        await client.close()

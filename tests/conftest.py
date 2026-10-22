@@ -122,6 +122,8 @@ def config(tmp_path) -> BrokerConfig:
             max_batch_size=4,
             min_dwell_seconds=0.05,
             power_headroom_threshold=0.25,
+            idle_flush=True,
+            idle_flush_seconds=0.05,
         ),
         scheduling=SchedulingConfig(
             interactive_concurrency=2,

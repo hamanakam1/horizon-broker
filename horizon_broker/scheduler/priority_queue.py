@@ -181,6 +181,7 @@ class JobPriorityQueue:
         policy: WindowPolicy,
         *,
         power_ok: bool = True,
+        fleet_idle: bool = False,
     ) -> list[FlexBatch]:
         """Evaluate every open window and return the batches that should run.
 
@@ -207,7 +208,9 @@ class JobPriorityQueue:
                     deadline=now + policy.window_seconds,
                 )
                 self._windows[model] = window
-            decision = evaluate_window(window, len(eligible), policy, now)
+            decision = evaluate_window(
+                window, len(eligible), policy, now, fleet_idle=fleet_idle
+            )
             if not decision.should_dispatch:
                 continue
             selected = eligible[: policy.max_batch_size]

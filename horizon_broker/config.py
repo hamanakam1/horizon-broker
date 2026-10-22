@@ -64,6 +64,17 @@ class WindowConfig:
     power_gated_tiers: tuple[str, ...] = ("solar_trailer", "battery")
     """Power classes that are gated."""
 
+    idle_flush: bool = True
+    """Dispatch a Flex batch early when the whole fleet is idle.
+
+    Waiting to build a batch only pays off when something else is waiting to
+    share the weight load. When the fleet has nothing else to do, holding the
+    work back adds latency for no gain.
+    """
+
+    idle_flush_seconds: float = 2.0
+    """How long the fleet must be idle before an early flush is allowed."""
+
 
 @dataclass(frozen=True)
 class SchedulingConfig:
@@ -75,6 +86,33 @@ class SchedulingConfig:
     """Above this budget a request is a candidate for the Flex tier."""
     poll_interval_seconds: float = 0.25
     """Idle sleep of the scheduler loops."""
+    max_queue_depth: int = 10_000
+    """Ingress backpressure limit; new work is refused above this depth."""
+
+
+@dataclass(frozen=True)
+class RoutingConfig:
+    """Tunables of the PD-DAG router."""
+
+    kv_handoff_models: tuple[str, ...] = ()
+    """Models whose engine can hand a KV cache to another node.
+
+    Splitting prefill from decode is only possible when the engine can export
+    the KV state. Ollama cannot, so the split stays off until an engine that
+    supports it is named here.
+    """
+
+    prefill_prompt_threshold: int = 4_096
+    """Prompt size above which the job is treated as prefill-bound."""
+
+    decode_output_threshold: int = 2_048
+    """Generation size above which the job is treated as decode-bound."""
+
+    prefill_intensity_ratio: float = 4.0
+    """Prefill-to-decode FLOP ratio above which the prefill phase dominates."""
+
+    decode_intensity_ratio: float = 0.25
+    """Prefill-to-decode FLOP ratio below which the decode phase dominates."""
 
 
 @dataclass(frozen=True)
@@ -120,15 +158,60 @@ class BrokerConfig:
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     window: WindowConfig = field(default_factory=WindowConfig)
     scheduling: SchedulingConfig = field(default_factory=SchedulingConfig)
+    routing: RoutingConfig = field(default_factory=RoutingConfig)
     recovery: RecoveryConfig = field(default_factory=RecoveryConfig)
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     journal_path: str = "./var/horizon-broker/journal.jsonl"
     static_nodes: tuple[NodeCapability, ...] = ()
     log_level: str = "INFO"
+    drain_timeout_seconds: float = 30.0
+    """How long a shutdown waits for in-flight work to finish."""
 
     def node_ids(self) -> tuple[str, ...]:
         return tuple(node.node_id for node in self.static_nodes)
+
+    def validate(self) -> None:
+        """Reject an unusable configuration before the broker starts.
+
+        Failing here is better than a broker that accepts work it cannot run.
+        """
+        problems: list[str] = []
+        if self.window.min_batch_size < 1:
+            problems.append("window.min_batch_size must be at least 1")
+        if self.window.max_batch_size < self.window.min_batch_size:
+            problems.append(
+                "window.max_batch_size must be greater than or equal to window.min_batch_size"
+            )
+        if self.window.window_seconds <= 0:
+            problems.append("window.window_seconds must be positive")
+        if self.window.min_dwell_seconds < 0:
+            problems.append("window.min_dwell_seconds must not be negative")
+        if self.window.idle_flush_seconds < 0:
+            problems.append("window.idle_flush_seconds must not be negative")
+        if self.scheduling.interactive_concurrency < 1:
+            problems.append("scheduling.interactive_concurrency must be at least 1")
+        if self.scheduling.flex_concurrency < 1:
+            problems.append("scheduling.flex_concurrency must be at least 1")
+        if self.scheduling.max_queue_depth < 1:
+            problems.append("scheduling.max_queue_depth must be at least 1")
+        if self.recovery.max_attempts < 1:
+            problems.append("recovery.max_attempts must be at least 1")
+        if self.recovery.recovery_budget_seconds <= 0:
+            problems.append("recovery.recovery_budget_seconds must be positive")
+        if self.heartbeat.timeout_seconds <= self.heartbeat.interval_seconds:
+            problems.append(
+                "heartbeat.timeout_seconds must be greater than heartbeat.interval_seconds"
+            )
+        if self.drain_timeout_seconds < 0:
+            problems.append("drain_timeout_seconds must not be negative")
+        seen: set[str] = set()
+        for node in self.static_nodes:
+            if node.node_id in seen:
+                problems.append(f"duplicate node id: {node.node_id}")
+            seen.add(node.node_id)
+        if problems:
+            raise ValueError("invalid configuration: " + "; ".join(problems))
 
 
 def _env(name: str) -> str | None:
@@ -177,6 +260,9 @@ def _apply_env_overrides(config: BrokerConfig) -> BrokerConfig:
         ("WINDOW_SECONDS", config.window, "window_seconds", config.window.window_seconds),
         ("WINDOW_MIN_BATCH", config.window, "min_batch_size", config.window.min_batch_size),
         ("WINDOW_MAX_BATCH", config.window, "max_batch_size", config.window.max_batch_size),
+        ("WINDOW_IDLE_FLUSH_SECONDS", config.window, "idle_flush_seconds", config.window.idle_flush_seconds),
+        ("WINDOW_IDLE_FLUSH", config.window, "idle_flush", config.window.idle_flush),
+        ("MAX_QUEUE_DEPTH", config.scheduling, "max_queue_depth", config.scheduling.max_queue_depth),
         ("RECOVERY_BUDGET", config.recovery, "recovery_budget_seconds", config.recovery.recovery_budget_seconds),
         ("MAX_ATTEMPTS", config.recovery, "max_attempts", config.recovery.max_attempts),
     ):
@@ -188,8 +274,14 @@ def _apply_env_overrides(config: BrokerConfig) -> BrokerConfig:
             config = replace(config, heartbeat=replace(config.heartbeat, **{attribute: value}))
         elif suffix.startswith("WINDOW"):
             config = replace(config, window=replace(config.window, **{attribute: value}))
+        elif suffix.startswith("MAX_QUEUE"):
+            config = replace(config, scheduling=replace(config.scheduling, **{attribute: value}))
         else:
             config = replace(config, recovery=replace(config.recovery, **{attribute: value}))
+
+    drain = _env("DRAIN_TIMEOUT")
+    if drain is not None:
+        config = replace(config, drain_timeout_seconds=float(drain))
     return config
 
 
@@ -225,11 +317,17 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
 
     window = data.get("window")
     if isinstance(window, dict):
+        window = {**window, "power_gated_tiers": tuple(window.get("power_gated_tiers", ()))}
         config = replace(config, window=replace(config.window, **window))
 
     scheduling = data.get("scheduling")
     if isinstance(scheduling, dict):
         config = replace(config, scheduling=replace(config.scheduling, **scheduling))
+
+    routing = data.get("routing")
+    if isinstance(routing, dict):
+        routing = {**routing, "kv_handoff_models": tuple(routing.get("kv_handoff_models", ()))}
+        config = replace(config, routing=replace(config.routing, **routing))
 
     recovery = data.get("recovery")
     if isinstance(recovery, dict):
@@ -251,6 +349,9 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
             port=int(broker.get("port", config.port)),
             log_level=broker.get("log_level", config.log_level),
             journal_path=broker.get("journal_path", config.journal_path),
+            drain_timeout_seconds=float(
+                broker.get("drain_timeout_seconds", config.drain_timeout_seconds)
+            ),
         )
 
     raw_nodes = data.get("nodes") or []
@@ -259,7 +360,9 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
             config, static_nodes=tuple(_node_from_mapping(item) for item in raw_nodes)
         )
 
-    return _apply_env_overrides(config)
+    config = _apply_env_overrides(config)
+    config.validate()
+    return config
 
 
 def dump_config(config: BrokerConfig) -> str:
@@ -273,6 +376,7 @@ def dump_config(config: BrokerConfig) -> str:
             "heartbeat": config.heartbeat.__dict__,
             "window": config.window.__dict__,
             "scheduling": config.scheduling.__dict__,
+            "routing": config.routing.__dict__,
             "recovery": config.recovery.__dict__,
             "ledger": config.ledger.__dict__,
             "ollama": config.ollama.__dict__,

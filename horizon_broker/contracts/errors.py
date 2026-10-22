@@ -46,3 +46,11 @@ class RecoveryBudgetExceededError(BrokerError):
 
 class MaxAttemptsExceededError(BrokerError):
     """The job exhausted its retry budget."""
+
+
+class QueueFullError(BrokerError):
+    """The queue reached its configured depth; the broker is applying backpressure."""
+
+
+class BrokerDrainingError(BrokerError):
+    """The broker is shutting down and is no longer accepting work."""

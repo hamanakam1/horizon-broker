@@ -27,7 +27,11 @@ from typing import Any
 import aiohttp
 
 from horizon_broker.config import BrokerConfig
-from horizon_broker.contracts.errors import NoCapacityError
+from horizon_broker.contracts.errors import (
+    BrokerDrainingError,
+    NoCapacityError,
+    QueueFullError,
+)
 from horizon_broker.contracts.jobs import InferenceJob, JobState
 from horizon_broker.contracts.nodes import NodeHealth
 from horizon_broker.contracts.recovery import utcnow
@@ -75,7 +79,10 @@ class BrokerEngine:
             "horizon_jobs_failed_total",
             "horizon_jobs_recovered_total",
             "horizon_jobs_deferred_total",
+            "horizon_jobs_duplicate_total",
             "horizon_flex_batches_total",
+            "horizon_splits_handed_off_total",
+            "horizon_splits_degraded_total",
         ):
             self.metrics.declare(metric)
 
@@ -83,7 +90,7 @@ class BrokerEngine:
         for node in config.static_nodes:
             self.registry.upsert(node)
 
-        self.router = PDDagRouter()
+        self.router = PDDagRouter(config=config.routing)
         self.queue = JobPriorityQueue()
         self.window_policy = WindowPolicy.from_config(config.window)
         self.planner = BatchPlanner(self.router)
@@ -103,6 +110,7 @@ class BrokerEngine:
             ollama_factory=self._ollama_factory,
             assign=self._assign,
             recover=self._recover,
+            metrics=self.metrics,
         )
         self.manager = NodeConnectionManager(
             self.registry,
@@ -126,7 +134,9 @@ class BrokerEngine:
 
         self._jobs: dict[str, InferenceJob] = {}
         self._tasks: list[asyncio.Task[None]] = []
+        self._ollama_clients: dict[str, OllamaClient] = {}
         self._running = False
+        self._draining = False
         self._inflight_interactive = 0
         self._inflight_flex = 0
 
@@ -149,8 +159,15 @@ class BrokerEngine:
             self.config.window.window_seconds,
         )
 
-    async def stop(self) -> None:
-        """Stop every background task and release the transports."""
+    async def stop(self, *, drain: bool = True) -> None:
+        """Stop the broker.
+
+        With ``drain`` the broker stops accepting work, lets the in-flight
+        jobs finish (up to ``drain_timeout_seconds``) and then tears down.
+        Without it the broker stops immediately.
+        """
+        if drain and self._running:
+            await self.drain(timeout=self.config.drain_timeout_seconds)
         self._running = False
         for task in self._tasks:
             task.cancel()
@@ -158,13 +175,50 @@ class BrokerEngine:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await self.manager.close()
+        await self._close_ollama_clients()
         await self.ledger.close()
         LOGGER.info("horizon broker stopped")
+
+    async def drain(self, timeout: float) -> bool:
+        """Stop accepting work and wait for the in-flight jobs to finish.
+
+        Returns True when everything finished inside the timeout.
+        """
+        self._draining = True
+        LOGGER.info("draining: refusing new work, waiting for in-flight jobs")
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            if not self.supervisor.active_jobs() and not self._inflight_interactive:
+                break
+            await asyncio.sleep(0.05)
+        pending = self.supervisor.active_jobs()
+        if pending:
+            LOGGER.warning("drain timed out with %d job(s) still running", len(pending))
+            return False
+        LOGGER.info("drain complete")
+        return True
 
     # -- ingress ------------------------------------------------------------
 
     async def submit(self, job: InferenceJob) -> InferenceJob:
-        """Accept a job and place it on the correct lane."""
+        """Accept a job and place it on the correct lane.
+
+        Submission is idempotent: a repeated job id returns the job that is
+        already known instead of starting the work twice. Callers that retry
+        after a timeout get the original job back.
+        """
+        existing = self._jobs.get(job.job_id)
+        if existing is not None:
+            LOGGER.info("job %s already known; ignoring duplicate submission", job.job_id)
+            self.metrics.incr("horizon_jobs_duplicate_total")
+            return existing
+        if self._draining:
+            raise BrokerDrainingError("the broker is draining and is not accepting work")
+        if self._queue_depth() >= self.config.scheduling.max_queue_depth:
+            raise QueueFullError(
+                f"queue depth {self._queue_depth()} reached the configured limit "
+                f"{self.config.scheduling.max_queue_depth}"
+            )
         self._jobs[job.job_id] = job
         try:
             await self.store.store_job_payload(job)
@@ -223,6 +277,7 @@ class BrokerEngine:
                 "interactive": self._inflight_interactive,
                 "flex": self._inflight_flex,
             },
+            "draining": self._draining,
             "tracked_jobs": len(self._jobs),
         }
 
@@ -254,6 +309,7 @@ class BrokerEngine:
                         time.time(),
                         self.window_policy,
                         power_ok=self._flex_power_ok(),
+                        fleet_idle=self._fleet_idle(),
                     )
                     for batch in batches:
                         self._inflight_flex += 1
@@ -361,13 +417,27 @@ class BrokerEngine:
     # -- helpers ------------------------------------------------------------
 
     def _ollama_factory(self, node: Any) -> OllamaClient:
-        """Build an Ollama client for a node that executes directly."""
+        """Build an Ollama client for a node that executes directly.
+
+        Clients are cached per endpoint: every dispatch would otherwise open
+        (and leak) its own HTTP session.
+        """
         base_url = getattr(node, "ollama_url", None) or self.config.ollama.base_url
-        return OllamaClient(
-            base_url,
-            timeout_seconds=self.config.ollama.timeout_seconds,
-            keep_alive=self.config.ollama.keep_alive,
-        )
+        client = self._ollama_clients.get(base_url)
+        if client is None:
+            client = OllamaClient(
+                base_url,
+                timeout_seconds=self.config.ollama.timeout_seconds,
+                keep_alive=self.config.ollama.keep_alive,
+            )
+            self._ollama_clients[base_url] = client
+        return client
+
+    async def _close_ollama_clients(self) -> None:
+        """Close every cached Ollama client."""
+        for client in self._ollama_clients.values():
+            await client.close()
+        self._ollama_clients.clear()
 
     async def _assign(self, node_id: str, frame: dict[str, Any]) -> None:
         """Send an assignment frame to an agent container."""
@@ -386,3 +456,18 @@ class BrokerEngine:
                 continue
             return True
         return False
+
+    def _fleet_idle(self) -> bool:
+        """True when nothing is running anywhere in the mesh.
+
+        With an idle fleet there is no batch to amortise against, so holding
+        Flex work back only adds latency.
+        """
+        if self._inflight_interactive or self._inflight_flex:
+            return False
+        return not self.supervisor.active_jobs()
+
+    def _queue_depth(self) -> int:
+        """Total number of jobs waiting in the queue."""
+        stats = self.queue.stats()
+        return stats.interactive + stats.flex

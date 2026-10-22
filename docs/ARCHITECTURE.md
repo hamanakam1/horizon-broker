@@ -103,9 +103,15 @@ Both lanes share one `Dispatcher`, one `PDDagRouter` and one `JobSupervisor`.
 
 The window opens when the first Flex job for a model arrives. It closes when
 the batch reaches `max_batch_size`, when the batch reaches `min_batch_size`
-*and* the window has been open for `min_dwell_seconds`, or when
-`window_seconds` elapse. Windows are per model: prompts for different models
-cannot share a weight load, so mixing them would defeat the purpose.
+*and* the window has been open for `min_dwell_seconds`, when the fleet has
+been idle for `idle_flush_seconds`, or when `window_seconds` elapse. Windows
+are per model: prompts for different models cannot share a weight load, so
+mixing them would defeat the purpose.
+
+The idle flush matters: batching only pays off when something else can share
+the weight load. When the whole mesh is idle, holding a single prompt back
+adds latency for no gain — so the batch goes out early. This is the
+"waits until the M3 Max is idle" rule from the design, not an afterthought.
 
 The payoff is the MFU argument. Streaming weights out of unified memory once
 for a batch of 16 costs the same as streaming them once for a single prompt;
@@ -129,10 +135,44 @@ decode_bytes   = (2 * P / batch) * N + kv_bytes * N
 | neither dominates | `BALANCED` | general-purpose node, least loaded wins |
 
 The split mode requires the engine to support KV-cache hand-off
-(`ModelProfile.supports_kv_handoff`). The contract carries
-`kv_cache_state_id` and `InferenceJob.phase` for exactly this, but Ollama
-does not expose a KV-cache export endpoint yet — so the split is currently
-negotiated but not executed. The direct modes are fully live.
+(`routing.kv_handoff_models`). The contract carries `kv_cache_state_id` and
+`InferenceJob.phase` for exactly this, but Ollama does not expose a KV-cache
+export endpoint yet — so the split is currently negotiated but not executed.
+The direct modes are fully live.
+
+### The two-phase split, end to end
+
+When the router emits a `PD_SPLIT` decision and both nodes are agent
+containers, the broker runs the job in two phases:
+
+```text
+supervisor ──assign(phase=prefill)──▶ m3-max
+m3-max     ──complete(kv_cache_ref)──▶ supervisor
+supervisor ──assign(phase=decode, kv_cache_state_id)──▶ pi-decode
+pi-decode  ──complete(text)──▶ supervisor
+```
+
+The prefill node reports the KV-cache reference it produced; the decode node
+consumes it. Two degradations are explicit rather than silent:
+
+* a direct Ollama node cannot export a KV cache, so the split is refused
+  before it starts and the job runs whole on the prefill node
+  (`horizon_splits_degraded_total`);
+* a prefill node that finishes without a reference re-runs the job whole on
+  the decode node instead of failing the work.
+
+## Lifecycle guarantees
+
+**Idempotent submission.** A repeated `job_id` returns the job that is
+already known. A caller that retries after a timeout cannot double-execute.
+
+**Backpressure.** Above `scheduling.max_queue_depth` the ingress answers
+`429` instead of accepting work the fleet cannot absorb.
+
+**Draining.** On `SIGTERM` the broker stops accepting work (`503`), waits for
+the in-flight jobs up to `broker.drain_timeout_seconds`, then exits. Jobs
+that were still running are checkpointed first, so a drain never costs more
+than the recovery path already protects.
 
 ## Fault timeline
 

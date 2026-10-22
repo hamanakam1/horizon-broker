@@ -7,7 +7,7 @@ and ``docs/CONTRACTS.md`` for the data contracts.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from horizon_broker.config import BrokerConfig, load_config
 from horizon_broker.contracts import (

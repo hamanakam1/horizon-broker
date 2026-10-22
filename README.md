@@ -67,10 +67,15 @@ pip install -e ".[dev]"
 
 ```sh
 cp config/broker.example.yaml config/broker.yaml   # edit to taste
+python -m horizon_broker check-config --config config/broker.yaml
 python -m horizon_broker serve --config config/broker.yaml
 ```
 
-The broker listens on `127.0.0.1:8791` by default.
+The broker listens on `127.0.0.1:8791` by default. `check-config` validates
+the file and the fleet before the broker starts, so a broken configuration
+fails loudly instead of at the first dispatch. `SIGTERM` drains: the broker
+stops accepting work, finishes the in-flight jobs (up to
+`broker.drain_timeout_seconds`) and exits.
 
 ## Use
 
@@ -106,7 +111,7 @@ curl -s http://127.0.0.1:8791/v1/jobs/0f2c... | python3 -m json.tool
 
 | Route | Purpose |
 | --- | --- |
-| `POST /v1/jobs` | Submit a job (202 + `job_id`) |
+| `POST /v1/jobs` | Submit a job (202 + `job_id`); 429 when the queue is full, 503 while draining |
 | `GET /v1/jobs/{job_id}` | Job status and result |
 | `DELETE /v1/jobs/{job_id}` | Cancel queued or running work |
 | `GET /v1/nodes` | The fleet view (capabilities, health, load) |
@@ -115,6 +120,10 @@ curl -s http://127.0.0.1:8791/v1/jobs/0f2c... | python3 -m json.tool
 | `GET /v1/config` | The effective configuration |
 | `GET /healthz`, `GET /readyz` | Liveness and readiness |
 | `GET /metrics` | Prometheus text exposition |
+
+Submission is idempotent: posting the same `job_id` twice returns the job
+that is already known instead of starting the work again, so a caller that
+retries after a timeout cannot double-execute.
 
 ## Configuration
 
@@ -147,12 +156,16 @@ make schemas     # regenerate schemas/*.v1.json
 
 ## Status
 
-**v0.1.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests. Not yet done: KV-cache
-hand-off between nodes (the contract carries `kv_cache_state_id`, but Ollama
-does not yet expose a KV-cache export endpoint), multi-broker coordination,
-and a real EdgeRecord ledger adapter (the HTTP port is exercised through a
-fake in the test suite).
+**v0.2.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
+recovery paths are implemented and covered by tests (85 of them). The
+prefill/decode split runs end to end for engines that can export a KV cache
+(enable them in `routing.kv_handoff_models`); Ollama cannot, so the broker
+degrades a split to a whole-job run and says so in the log and the
+`horizon_splits_degraded_total` metric.
+
+Not done yet: a real EdgeRecord ledger adapter (the HTTP port is exercised
+through a fake in the test suite) and multi-broker coordination (one broker
+owns one fleet).
 
 ## License
 

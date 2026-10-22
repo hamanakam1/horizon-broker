@@ -89,3 +89,41 @@ def test_batch_is_capped_at_max_batch_size() -> None:
     batches = queue.plan_flex(now, policy)
     assert batches[0].size == 3
     assert len(queue.pending_flex()) == 4
+
+
+def test_an_idle_fleet_flushes_the_window_early() -> None:
+    """One job must not wait for a batch that will never arrive."""
+    policy = WindowPolicy(
+        window_seconds=60.0,
+        min_batch_size=8,
+        max_batch_size=16,
+        min_dwell_seconds=30.0,
+        idle_flush=True,
+        idle_flush_seconds=2.0,
+    )
+    queue = JobPriorityQueue()
+    now = time.time()
+    queue.submit(make_job(tier=PriorityTier.FLEX))
+
+    # The first pass opens the window; the fleet is busy, so nothing goes out.
+    assert queue.plan_flex(now, policy, fleet_idle=False) == []
+    batches = queue.plan_flex(now + 3.0, policy, fleet_idle=True)
+    assert len(batches) == 1
+    assert batches[0].reason == "fleet_idle"
+    assert batches[0].size == 1
+
+
+def test_the_idle_flush_can_be_switched_off() -> None:
+    policy = WindowPolicy(
+        window_seconds=60.0,
+        min_batch_size=8,
+        max_batch_size=16,
+        min_dwell_seconds=30.0,
+        idle_flush=False,
+        idle_flush_seconds=2.0,
+    )
+    queue = JobPriorityQueue()
+    now = time.time()
+    queue.submit(make_job(tier=PriorityTier.FLEX))
+    assert queue.plan_flex(now, policy) == []
+    assert queue.plan_flex(now + 3.0, policy, fleet_idle=True) == []

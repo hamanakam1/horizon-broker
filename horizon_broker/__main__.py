@@ -27,12 +27,25 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--config", default=None, help="path to the YAML configuration file")
     serve.add_argument("--host", default=None, help="override the bind address")
     serve.add_argument("--port", type=int, default=None, help="override the bind port")
+    serve.add_argument(
+        "--no-drain",
+        action="store_true",
+        help="stop immediately instead of finishing the in-flight jobs",
+    )
+
+    check = subparsers.add_parser("check-config", help="validate the configuration and exit")
+    check.add_argument("--config", default=None, help="path to the YAML configuration file")
 
     subparsers.add_parser("version", help="print the broker version")
     return parser
 
 
-async def run_server(config_path: str | None, host: str | None, port: int | None) -> int:
+async def run_server(
+    config_path: str | None,
+    host: str | None,
+    port: int | None,
+    drain: bool = True,
+) -> int:
     """Run the broker until interrupted."""
     config = load_config(config_path)
     overrides: dict[str, Any] = {}
@@ -57,7 +70,8 @@ async def run_server(config_path: str | None, host: str | None, port: int | None
     try:
         await stop.wait()
     finally:
-        await server.stop()
+        # Drain through the server so the ingress stops accepting work first.
+        await server.stop(drain=drain)
     return 0
 
 
@@ -70,9 +84,23 @@ def main(argv: list[str] | None = None) -> int:
 
         print(__version__)
         return 0
+    if args.command == "check-config":
+        try:
+            config = load_config(args.config)
+        except (OSError, ValueError) as exc:
+            print(f"configuration is not usable: {exc}", file=sys.stderr)
+            return 1
+        print(
+            f"configuration is valid: {len(config.static_nodes)} node(s), "
+            f"window={config.window.window_seconds}s, "
+            f"recovery_budget={config.recovery.recovery_budget_seconds}s"
+        )
+        return 0
     if args.command == "serve":
         try:
-            return asyncio.run(run_server(args.config, args.host, args.port))
+            return asyncio.run(
+                run_server(args.config, args.host, args.port, drain=not args.no_drain)
+            )
         except KeyboardInterrupt:
             return 0
     parser.error(f"unknown command {args.command}")

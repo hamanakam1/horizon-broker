@@ -7,6 +7,7 @@ that the internal module layout stays free to change.
 from __future__ import annotations
 
 from horizon_broker.contracts.errors import (
+    BrokerDrainingError,
     BrokerError,
     JobExpiredError,
     LedgerError,
@@ -14,6 +15,7 @@ from horizon_broker.contracts.errors import (
     MaxAttemptsExceededError,
     NoCapacityError,
     NodeUnreachableError,
+    QueueFullError,
     RecoveryBudgetExceededError,
     RoutingError,
     UnknownJobError,
@@ -43,6 +45,7 @@ from horizon_broker.contracts.recovery import (
 )
 
 __all__ = [
+    "BrokerDrainingError",
     "BrokerError",
     "ChatMessage",
     "ExecutionMode",
@@ -65,6 +68,7 @@ __all__ = [
     "PartialToken",
     "PowerClass",
     "PriorityTier",
+    "QueueFullError",
     "RecoveryBudgetExceededError",
     "ResumePoint",
     "RoutingError",

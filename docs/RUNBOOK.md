@@ -98,7 +98,8 @@ curl -s http://127.0.0.1:8791/v1/queue
 | Symptom | Lever |
 | --- | --- |
 | MFU too low, batches too small | `window.min_batch_size` down, `window.max_batch_size` up |
-| Flex work starts too late | `window.window_seconds` down |
+| Flex work starts too late | `window.window_seconds` down, or `window.idle_flush_seconds` down |
+| A lone Flex job waits for a batch that never comes | `window.idle_flush` is on by default; check `horizon_flex_batches_total{reason="fleet_idle"}` |
 | Interactive requests queue behind Flex work | separate the lanes: `scheduling.interactive_concurrency` |
 | Trailer battery drains during sleep-time runs | `window.power_headroom_threshold` up |
 
@@ -123,6 +124,24 @@ restarted broker can rebuild the envelope of a job it was running.
 
 Snapshots survive in EdgeRecord, which is the point: the ledger is what makes
 recovery survive a broker crash.
+
+`SIGTERM` drains instead of cutting: the ingress stops accepting work
+(`503`), the in-flight jobs are finished (up to
+`broker.drain_timeout_seconds`, 30 s by default) and only then does the
+process exit. `--no-drain` skips the wait; use it only when the node is
+going away anyway.
+
+## The queue is full (429)
+
+The ingress refuses new work above `scheduling.max_queue_depth` (10 000 by
+default). That is backpressure, not a failure: the caller should retry later.
+
+```sh
+curl -s http://127.0.0.1:8791/v1/queue | python3 -m json.tool
+```
+
+Raise the limit only when the fleet can actually absorb more; a deeper queue
+just moves the wait from the caller to the agents.
 
 ## Tuning the detection budget
 

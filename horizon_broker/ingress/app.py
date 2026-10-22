@@ -15,6 +15,7 @@ from aiohttp import web
 from pydantic import ValidationError
 
 from horizon_broker.config import BrokerConfig
+from horizon_broker.contracts.errors import BrokerDrainingError, QueueFullError
 from horizon_broker.contracts.jobs import InferenceJob, PriorityTier
 from horizon_broker.contracts.nodes import NodeCapability
 from horizon_broker.scheduler.engine import BrokerEngine
@@ -71,7 +72,14 @@ async def handle_submit(request: web.Request) -> web.Response:
         return JSON(
             {"error": "invalid job", "details": json.loads(exc.json())}, status=422
         )
-    await engine.submit(job)
+    try:
+        await engine.submit(job)
+    except QueueFullError as exc:
+        LOGGER.warning("refusing job %s: %s", job.job_id, exc)
+        return JSON({"error": "queue full", "detail": str(exc)}, status=429)
+    except BrokerDrainingError as exc:
+        LOGGER.info("refusing job %s: %s", job.job_id, exc)
+        return JSON({"error": "broker draining", "detail": str(exc)}, status=503)
     return JSON(
         {
             "job_id": job.job_id,
@@ -154,8 +162,15 @@ async def handle_readyz(request: web.Request) -> web.Response:
     """``GET /readyz`` -- readiness: at least one node is reachable."""
     engine = _engine(request)
     healthy = len(engine.registry.healthy_nodes())
-    ready = healthy > 0
-    return JSON({"status": "ready" if ready else "degraded", "healthy_nodes": healthy}, status=200 if ready else 503)
+    stats = engine.stats()
+    draining = bool(stats.get("draining"))
+    ready = healthy > 0 and not draining
+    body = {
+        "status": "ready" if ready else ("draining" if draining else "degraded"),
+        "healthy_nodes": healthy,
+        "draining": draining,
+    }
+    return JSON(body, status=200 if ready else 503)
 
 
 async def handle_metrics(request: web.Request) -> web.Response:

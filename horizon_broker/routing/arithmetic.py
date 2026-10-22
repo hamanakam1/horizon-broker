@@ -25,6 +25,16 @@ BYTES_PER_PARAM_BF16 = 2
 """Weight bytes per parameter for a bf16 checkpoint."""
 
 
+@dataclass(frozen=True)
+class RoutingThresholds:
+    """The token and intensity thresholds that separate the compute phases."""
+
+    prefill_prompt_threshold: int = 4_096
+    decode_output_threshold: int = 2_048
+    prefill_ratio: float = 4.0
+    decode_ratio: float = 0.25
+
+
 class ComputePhase(StrEnum):
     """Dominant phase of a job, from an arithmetic-intensity point of view."""
 
@@ -101,6 +111,8 @@ class ArithmeticProfile:
     phase: ComputePhase
     intensity_ratio: float
     """prefill FLOPs divided by decode FLOPs."""
+    supports_kv_handoff: bool = False
+    """True when the engine can hand a KV cache to another node."""
 
     @property
     def prefill_intensity(self) -> float:
@@ -184,7 +196,11 @@ def profile_for(model: str) -> ModelProfile:
     return DEFAULT_PROFILES["qwen2.5:7b"]
 
 
-def analyse(payload: InferencePayload, batch_size: int = 1) -> ArithmeticProfile:
+def analyse(
+    payload: InferencePayload,
+    batch_size: int = 1,
+    thresholds: RoutingThresholds | None = None,
+) -> ArithmeticProfile:
     """Characterise the arithmetic shape of ``payload``."""
     profile = profile_for(payload.model)
     prompt_tokens = payload.estimated_prompt_tokens
@@ -196,7 +212,7 @@ def analyse(payload: InferencePayload, batch_size: int = 1) -> ArithmeticProfile
     decode_bytes = profile.decode_bytes(output_tokens, batch_size=batch_size)
 
     intensity_ratio = (prefill_flops / decode_flops) if decode_flops > 0 else float("inf")
-    phase = _classify(prompt_tokens, output_tokens, intensity_ratio)
+    phase = _classify(prompt_tokens, output_tokens, intensity_ratio, thresholds)
     return ArithmeticProfile(
         model=payload.model,
         prompt_tokens=prompt_tokens,
@@ -207,16 +223,23 @@ def analyse(payload: InferencePayload, batch_size: int = 1) -> ArithmeticProfile
         decode_bytes=decode_bytes,
         phase=phase,
         intensity_ratio=intensity_ratio,
+        supports_kv_handoff=profile.supports_kv_handoff,
     )
 
 
-def _classify(prompt_tokens: int, output_tokens: int, intensity_ratio: float) -> ComputePhase:
+def _classify(
+    prompt_tokens: int,
+    output_tokens: int,
+    intensity_ratio: float,
+    thresholds: RoutingThresholds | None = None,
+) -> ComputePhase:
     """Classify the dominant phase from token counts and the FLOP ratio."""
-    if prompt_tokens >= 4_096 and intensity_ratio >= 4.0:
+    limits = thresholds or RoutingThresholds()
+    if prompt_tokens >= limits.prefill_prompt_threshold and intensity_ratio >= limits.prefill_ratio:
         return ComputePhase.PREFILL_BOUND
-    if output_tokens >= 2_048 and intensity_ratio <= 0.25:
+    if output_tokens >= limits.decode_output_threshold and intensity_ratio <= limits.decode_ratio:
         return ComputePhase.DECODE_BOUND
-    if prompt_tokens >= 8_192 and output_tokens >= 4_096:
+    if prompt_tokens >= 2 * limits.prefill_prompt_threshold and output_tokens >= 2 * limits.decode_output_threshold:
         # Both phases are heavy: a split is only worth it when the fleet has
         # dedicated prefill and decode nodes.
         return ComputePhase.PREFILL_BOUND

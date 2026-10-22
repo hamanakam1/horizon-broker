@@ -50,8 +50,13 @@ class NodeConnectionManager:
             self._session = aiohttp.ClientSession()
         return self._session
 
-    def _sync(self) -> None:
-        """Create connections for new nodes and drop connections for gone nodes."""
+    async def _sync(self) -> None:
+        """Create connections for new nodes and drop connections for gone nodes.
+
+        The connections share the manager's HTTP session: a session per node
+        would leak one socket pool per reconnect.
+        """
+        session = await self._get_session()
         wanted = {
             node.node_id
             for node in self.registry.all()
@@ -73,7 +78,7 @@ class NodeConnectionManager:
                 node.agent_ws_url,
                 on_event=self.handle_event,
                 config=self.config,
-                session=self._session,
+                session=session,
             )
             self._connections[node_id] = connection
             self._tasks[node_id] = asyncio.create_task(connection.run())
@@ -89,7 +94,7 @@ class NodeConnectionManager:
         """Periodically reconcile the set of connections."""
         while not self._closing:
             try:
-                self._sync()
+                await self._sync()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
