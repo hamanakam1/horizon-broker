@@ -66,3 +66,27 @@ class LocalJournal:
         records = await self.read_all(kind)
         matching = [item for item in records if item.get(field) == key]
         return matching[-1] if matching else None
+
+    def trim_sync(self, max_bytes: int) -> int:
+        """Drop the oldest lines until the journal fits into ``max_bytes``.
+
+        The newest records are kept: they are the ones a recovery needs.
+        Returns the number of bytes removed.
+        """
+        if max_bytes <= 0 or not self.path.exists():
+            return 0
+        size = self.path.stat().st_size
+        if size <= max_bytes:
+            return 0
+        with self.path.open("rb") as handle:
+            content = handle.read()
+        kept = content[-max_bytes:]
+        newline = kept.find(b"\n")
+        if newline != -1:
+            kept = kept[newline + 1 :]
+        self.path.write_bytes(kept)
+        return size - len(kept)
+
+    async def trim(self, max_bytes: int) -> int:
+        """Async wrapper around :meth:`trim_sync`."""
+        return await asyncio.to_thread(self.trim_sync, max_bytes)

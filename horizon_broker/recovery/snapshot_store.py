@@ -32,6 +32,8 @@ LOGGER = logging.getLogger(__name__)
 
 SNAPSHOT_KIND = "snapshot"
 JOB_KIND = "job_payload"
+TRIM_EVERY = 200
+"""How many commits pass between two journal trims."""
 
 
 class SnapshotStore:
@@ -43,6 +45,7 @@ class SnapshotStore:
         ledger: EdgeRecordClient | None,
         journal: LocalJournal,
         ledger_config: LedgerConfig | None = None,
+        journal_max_bytes: int = 64 * 1024 * 1024,
     ) -> None:
         self.ledger = ledger
         self.journal = journal
@@ -50,6 +53,8 @@ class SnapshotStore:
         self.collection = (
             self.ledger_config.collection if self.ledger_config else "horizon_broker.snapshots"
         )
+        self.journal_max_bytes = journal_max_bytes
+        self._commits = 0
 
     async def commit(self, snapshot: FaultRecoverySnapshot) -> LedgerCommitReceipt | None:
         """Persist a snapshot; returns the receipt when EdgeRecord accepted it."""
@@ -64,6 +69,7 @@ class SnapshotStore:
                 "snapshot": body,
             },
         )
+        await self._maybe_trim()
         if self.ledger is None or not self.ledger.enabled:
             return None
         record = LedgerRecord.build(
@@ -106,12 +112,26 @@ class SnapshotStore:
             LOGGER.warning("ignoring corrupt snapshot for job %s: %s", job_id, exc)
             return None
 
+    async def _maybe_trim(self) -> None:
+        """Keep the journal from growing without bound."""
+        self._commits += 1
+        if self._commits % TRIM_EVERY != 0:
+            return
+        try:
+            removed = await self.journal.trim(self.journal_max_bytes)
+        except OSError as exc:
+            LOGGER.warning("could not trim the journal: %s", exc)
+            return
+        if removed:
+            LOGGER.info("trimmed %d bytes from the local journal", removed)
+
     async def store_job_payload(self, job: InferenceJob) -> None:
         """Persist the job envelope so a cold broker can rebuild it."""
         await self.journal.append(
             JOB_KIND,
             {"job_id": job.job_id, "job": job.model_dump(mode="json")},
         )
+        await self._maybe_trim()
 
     async def load_job_payload(self, job_id: str) -> InferenceJob | None:
         """Rebuild a job envelope from the journal."""

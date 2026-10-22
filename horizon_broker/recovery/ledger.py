@@ -19,7 +19,9 @@ caller can fall back to the local journal.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from typing import Any
 
 import aiohttp
@@ -50,6 +52,19 @@ class EdgeRecordClient:
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Build the auth headers from the environment.
+
+        The token is read per request so that it can be rotated without
+        restarting the broker.
+        """
+        token = os.environ.get(self.config.auth_token_env, "").strip()
+        if not token:
+            return {}
+        scheme = self.config.auth_scheme.strip()
+        value = f"{scheme} {token}" if scheme else token
+        return {self.config.auth_header: value}
+
     async def close(self) -> None:
         """Release the HTTP session when this client owns it."""
         if self._session is not None and self._owns_session:
@@ -61,7 +76,11 @@ class EdgeRecordClient:
         return self.config.enabled
 
     async def commit(self, record: LedgerRecord) -> LedgerCommitReceipt:
-        """Commit a record durably and return the receipt."""
+        """Commit a record durably and return the receipt.
+
+        Transient failures (network errors, 5xx) are retried with a growing
+        backoff. A 4xx is permanent and is raised immediately.
+        """
         if not self.config.enabled:
             raise LedgerUnavailableError("ledger is disabled by configuration")
         session = await self._get_session()
@@ -72,24 +91,39 @@ class EdgeRecordClient:
             "content_hash": record.content_hash,
             "tags": list(record.tags),
         }
-        try:
-            async with session.post(url, json=body) as response:
-                if response.status >= 400:
-                    detail = await response.text()
-                    raise LedgerUnavailableError(
-                        f"ledger commit rejected: HTTP {response.status} {detail[:200]}"
-                    )
-                try:
-                    data = await response.json()
-                except Exception:  # noqa: BLE001 - ledger may answer with an empty body
-                    data = {}
-        except LedgerUnavailableError:
-            raise
-        except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-            raise LedgerUnavailableError(f"ledger commit failed: {exc}") from exc
+        data: dict[str, Any] = {}
+        last_error: Exception | None = None
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                async with session.post(
+                    url, json=body, headers=self._auth_headers()
+                ) as response:
+                    if response.status >= 500:
+                        detail = await response.text()
+                        last_error = LedgerUnavailableError(
+                            f"ledger commit failed: HTTP {response.status} {detail[:200]}"
+                        )
+                    elif response.status >= 400:
+                        detail = await response.text()
+                        raise LedgerUnavailableError(
+                            f"ledger commit rejected: HTTP {response.status} {detail[:200]}"
+                        )
+                    else:
+                        try:
+                            parsed = await response.json()
+                        except Exception:  # noqa: BLE001 - the ledger may answer with an empty body
+                            parsed = {}
+                        data = parsed if isinstance(parsed, dict) else {}
+                        break
+            except LedgerUnavailableError:
+                raise
+            except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                last_error = LedgerUnavailableError(f"ledger commit failed: {exc}")
+            if attempt < self.config.max_retries:
+                await asyncio.sleep(self.config.retry_backoff_seconds * (2**attempt))
+        else:
+            raise last_error or LedgerUnavailableError("ledger commit failed")
 
-        if not isinstance(data, dict):
-            data = {}
         return LedgerCommitReceipt(
             collection=record.collection,
             document_id=str(data.get("document_id", record.document_id)),
@@ -106,20 +140,37 @@ class EdgeRecordClient:
             f"{self.config.base_url.rstrip('/')}"
             f"{self.config.query_path.format(collection=self.config.collection)}"
         )
-        try:
-            async with session.get(url, params={"job_id": job_id, "limit": 1}) as response:
-                if response.status == 404:
-                    return None
-                if response.status >= 400:
-                    detail = await response.text()
-                    raise LedgerUnavailableError(
-                        f"ledger query rejected: HTTP {response.status} {detail[:200]}"
-                    )
-                data = await response.json()
-        except LedgerUnavailableError:
-            raise
-        except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-            raise LedgerUnavailableError(f"ledger query failed: {exc}") from exc
+        data: Any = None
+        for attempt in range(self.config.max_retries + 1):
+            try:
+                async with session.get(
+                    url,
+                    params={"job_id": job_id, "limit": 1},
+                    headers=self._auth_headers(),
+                ) as response:
+                    if response.status == 404:
+                        return None
+                    if response.status >= 500:
+                        detail = await response.text()
+                        last_error: Exception = LedgerUnavailableError(
+                            f"ledger query failed: HTTP {response.status} {detail[:200]}"
+                        )
+                    elif response.status >= 400:
+                        detail = await response.text()
+                        raise LedgerUnavailableError(
+                            f"ledger query rejected: HTTP {response.status} {detail[:200]}"
+                        )
+                    else:
+                        data = await response.json()
+                        break
+            except LedgerUnavailableError:
+                raise
+            except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+                last_error = LedgerUnavailableError(f"ledger query failed: {exc}")
+            if attempt < self.config.max_retries:
+                await asyncio.sleep(self.config.retry_backoff_seconds * (2**attempt))
+        else:
+            raise last_error or LedgerUnavailableError("ledger query failed")
 
         records = _extract_records(data)
         if not records:

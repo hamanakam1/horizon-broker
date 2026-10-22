@@ -138,6 +138,14 @@ class LedgerConfig:
     timeout_seconds: float = 5.0
     commit_path: str = "/collections/{collection}/records"
     query_path: str = "/collections/{collection}/records"
+    max_retries: int = 2
+    """How often a transient ledger failure is retried before giving up."""
+    retry_backoff_seconds: float = 0.25
+    """Base delay between retries; it doubles after every attempt."""
+    auth_token_env: str = "EDGERECORD_TOKEN"
+    """Environment variable holding the ledger token (empty means no auth)."""
+    auth_header: str = "Authorization"
+    auth_scheme: str = "Bearer"
 
 
 @dataclass(frozen=True)
@@ -163,6 +171,8 @@ class BrokerConfig:
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     journal_path: str = "./var/horizon-broker/journal.jsonl"
+    journal_max_bytes: int = 64 * 1024 * 1024
+    """The local journal is trimmed back to this size when it grows past it."""
     static_nodes: tuple[NodeCapability, ...] = ()
     log_level: str = "INFO"
     drain_timeout_seconds: float = 30.0

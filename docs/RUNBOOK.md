@@ -56,12 +56,29 @@ curl -s http://127.0.0.1:8791/metrics | grep horizon_
 grep -c '"kind": "snapshot"' var/horizon-broker/journal.jsonl
 ```
 
+A ledger that answers with 5xx or drops the connection is retried
+(`ledger.max_retries`, growing backoff) before the commit is given up on. A
+4xx means the *document* is wrong — that is a bug, not an outage: the broker
+logs `ledger commit rejected` and keeps the snapshot in the journal.
+
 The trade-off is durability, not availability: while the ledger is down, the
 recovery state only exists on the broker's own disk. A broker crash during a
 ledger outage loses the resume state (the job itself is not lost — it fails
-loudly and can be resubmitted).
+loudly and can be resubmitted). The journal is trimmed back to
+`broker.journal_max_bytes` (64 MiB by default), keeping the newest records.
 
 Restore the ledger, then the next checkpoint re-synchronises it.
+
+## The ledger rejects the commits (4xx)
+
+```sh
+grep 'ledger commit rejected' /tmp/horizon-broker.log
+```
+
+A rejection is not an outage: the broker is writing a document the ledger
+does not accept. Check the collection name, the document id and the payload
+shape against the ledger's own contract. The snapshots are still in the
+journal, so no recovery state is lost while the problem is fixed.
 
 ## The solar trailer is draining
 

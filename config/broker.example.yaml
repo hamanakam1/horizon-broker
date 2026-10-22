@@ -10,6 +10,7 @@ broker:
   port: 8791
   log_level: INFO
   journal_path: ./var/horizon-broker/journal.jsonl
+  journal_max_bytes: 67108864
   drain_timeout_seconds: 30
 
 heartbeat:
@@ -63,6 +64,15 @@ ledger:
   base_url: http://127.0.0.1:8787
   collection: horizon_broker.snapshots
   timeout_seconds: 5.0
+  # Transient failures (network errors, 5xx) are retried with a growing
+  # backoff; a 4xx is permanent and fails immediately.
+  max_retries: 2
+  retry_backoff_seconds: 0.25
+  # The token is read from the environment on every request, so it can be
+  # rotated without restarting the broker.
+  auth_token_env: EDGERECORD_TOKEN
+  auth_header: Authorization
+  auth_scheme: Bearer
 
 ollama:
   base_url: http://127.0.0.1:11434

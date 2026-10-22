@@ -56,6 +56,8 @@ LOGGER = logging.getLogger(__name__)
 MAX_TRACKED_JOBS = 10_000
 """How many finished jobs stay queryable through the status endpoint."""
 
+TERMINAL_STATES = (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED)
+
 
 class BrokerEngine:
     """The Horizon Broker runtime."""
@@ -101,6 +103,7 @@ class BrokerEngine:
             ledger=self.ledger,
             journal=self.journal,
             ledger_config=config.ledger,
+            journal_max_bytes=config.journal_max_bytes,
         )
 
         self.supervisor = JobSupervisor(
@@ -225,6 +228,7 @@ class BrokerEngine:
         except Exception as exc:  # noqa: BLE001 - journalling must not block ingress
             LOGGER.warning("could not journal job %s: %s", job.job_id, exc)
         self.queue.submit(job)
+        self._prune_jobs()
         self.metrics.incr("horizon_jobs_submitted_total", tier=job.priority_tier.value)
         LOGGER.info(
             "accepted job %s tier=%s model=%s latency_budget=%dms",
@@ -471,3 +475,25 @@ class BrokerEngine:
         """Total number of jobs waiting in the queue."""
         stats = self.queue.stats()
         return stats.interactive + stats.flex
+
+    def _prune_jobs(self) -> None:
+        """Keep the job store bounded.
+
+        Finished jobs are dropped oldest first: they are the ones nobody
+        queries again, and an unbounded store would grow for the life of the
+        broker.
+        """
+        if len(self._jobs) <= MAX_TRACKED_JOBS:
+            return
+        finished = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.state in TERMINAL_STATES
+        ]
+        if not finished:
+            return
+        finished.sort(key=lambda job_id: self._jobs[job_id].submitted_at)
+        excess = len(self._jobs) - MAX_TRACKED_JOBS
+        for job_id in finished[:excess]:
+            self._jobs.pop(job_id, None)
+        LOGGER.info("pruned %d finished job(s) from the job store", min(excess, len(finished)))

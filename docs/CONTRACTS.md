@@ -201,6 +201,14 @@ Defaults: `commit_path=/collections/{collection}/records`,
 `query_path=/collections/{collection}/records`,
 `collection=horizon_broker.snapshots`.
 
+Transient failures (network errors and 5xx) are retried with a growing
+backoff (`ledger.max_retries`, `ledger.retry_backoff_seconds`); a 4xx is
+permanent and fails immediately, because retrying a rejected document only
+delays the error. When `EDGERECORD_TOKEN` (configurable through
+`ledger.auth_token_env`) is set, it is sent as
+`Authorization: Bearer <token>`; the value is read per request so it can be
+rotated without restarting the broker.
+
 Any transport failure raises `LedgerUnavailableError`, which the snapshot
 store answers by reading the local journal instead.
 
