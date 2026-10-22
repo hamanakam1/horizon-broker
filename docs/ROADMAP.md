@@ -128,7 +128,7 @@ real work. Throughput is what makes the fleet worth owning.
 | # | Item | Where | Why it matters |
 | --- | --- | --- | --- |
 | 1.1 | Send a real batch to the engine | `scheduler/batcher.py:4`, `scheduler/engine.py:401` | today "batching" is a grouping that changes the order of N single-prompt requests; the MFU argument only holds if the weight load is amortised across one call |
-| 1.2 | Stream token by token | `ingress/app.py:216` | the whole result is buffered and emitted as one content delta; `stream: true` is not streaming |
+| 1.2 | Stream token by token | `ingress/app.py`, `scheduler/engine.py`, `nodes/executor.py` | **done** — the supervisor publishes every piece of the answer as it arrives and the OpenAI ingress writes one delta per piece |
 | 1.3 | Honour `ollama.timeout_seconds` | `ollama/client.py` | **done** — the configured budget bounds the generation instead of `ClientTimeout(total=None)` |
 | 1.4 | One HTTP session for the whole broker | `scheduler/engine.py` | open — the connection manager, the probe and the Ollama clients each open their own pool |
 | 1.5 | Wake the queue instead of polling it | `scheduler/engine.py`, `scheduler/priority_queue.py` | **done** — the lanes await the queue's wakeup event; the poll interval stays the fallback for time-based conditions |

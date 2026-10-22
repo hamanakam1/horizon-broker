@@ -7,6 +7,7 @@ touches the queue internals, the routers or the recovery subsystem.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -226,6 +227,9 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     except BrokerDrainingError as exc:
         return JSON({"error": {"message": str(exc), "type": "broker_draining"}}, status=503)
 
+    if body.get("stream"):
+        return await _stream_completion(request, engine, job, wait_for)
+
     text = await engine.wait_for_result(job.job_id, timeout=wait_for)
     if text is None:
         status = engine.status(job.job_id) or {}
@@ -267,6 +271,61 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     if config.log_level.upper() == "DEBUG":
         LOGGER.debug("openai completion for job %s", job.job_id)
     return JSON(payload)
+
+
+async def _stream_completion(
+    request: web.Request,
+    engine: BrokerEngine,
+    job: InferenceJob,
+    timeout: float | None,
+) -> web.StreamResponse:
+    """Answer a streamed chat completion as the engine produces the answer.
+
+    The pieces are written as they arrive, so the caller sees the first
+    token when the engine emits it instead of when the job finishes.
+    """
+    queue = engine.subscribe(job.job_id)
+    response = web.StreamResponse(
+        status=200,
+        headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
+    )
+    await response.prepare(request)
+    await response.write(sse(chunk_object(job, delta={"role": "assistant", "content": ""})))
+    timed_out = False
+    try:
+        while True:
+            try:
+                piece = await asyncio.wait_for(queue.get(), timeout=timeout)
+            except TimeoutError:
+                timed_out = True
+                break
+            if piece is None:
+                break
+            await response.write(sse(chunk_object(job, delta={"content": piece})))
+    finally:
+        engine.unsubscribe(job.job_id, queue)
+
+    if timed_out:
+        await response.write(
+            sse({"error": {"message": "the job did not finish in time", "type": "timeout"}})
+        )
+    else:
+        status = engine.status(job.job_id) or {}
+        if status.get("state") not in (None, "completed"):
+            await response.write(
+                sse(
+                    {
+                        "error": {
+                            "message": status.get("error") or "the job did not produce a result",
+                            "type": "job_failed",
+                        }
+                    }
+                )
+            )
+        await response.write(sse(chunk_object(job, delta={}, finish_reason="stop")))
+    await response.write(DONE)
+    await response.write_eof()
+    return response
 
 
 async def handle_models(request: web.Request) -> web.Response:

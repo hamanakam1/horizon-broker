@@ -137,6 +137,7 @@ class BrokerEngine:
             recover=self._recover,
             metrics=self.metrics,
             on_finished=self._on_job_finished,
+            on_chunk=self._publish_chunk,
         )
         self.manager = NodeConnectionManager(
             self.registry,
@@ -162,6 +163,8 @@ class BrokerEngine:
         self._jobs: dict[str, InferenceJob] = {}
         self._usage: dict[str, tuple[int, int]] = {}
         self._waiters: dict[str, set[asyncio.Future[str | None]]] = {}
+        self._chunk_subscribers: dict[str, list[asyncio.Queue[str | None]]] = {}
+        self._chunk_buffers: dict[str, list[str]] = {}
         self._journal_tasks: set[asyncio.Task[None]] = set()
         self._tasks: list[asyncio.Task[None]] = []
         self._ollama_clients: dict[str, OllamaClient] = {}
@@ -362,6 +365,7 @@ class BrokerEngine:
         for future in futures or ():
             if not future.done():
                 future.set_result(job.result_text)
+        self._finish_stream(job.job_id)
         self._record_state_async(job)
 
     def _record_state_async(self, job: InferenceJob) -> None:
@@ -424,6 +428,54 @@ class BrokerEngine:
     def token_usage(self, job_id: str) -> tuple[int, int] | None:
         """The measured (prompt, completion) token counts of a finished job."""
         return self._usage.get(job_id)
+
+    # -- chunk streaming ----------------------------------------------------
+
+    def subscribe(self, job_id: str) -> asyncio.Queue[str | None]:
+        """Listen to the text chunks of a job.
+
+        The queue yields the pieces of the answer as the engine produces
+        them and ends with ``None``. A job that already finished hands over
+        its result at once, so a late subscriber never waits for a stream
+        that has ended.
+        """
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        job = self._jobs.get(job_id)
+        if job is not None and job.state in TERMINAL_STATES:
+            if job.result_text:
+                queue.put_nowait(job.result_text)
+            queue.put_nowait(None)
+            return queue
+        for text in self._chunk_buffers.get(job_id, []):
+            queue.put_nowait(text)
+        self._chunk_subscribers.setdefault(job_id, []).append(queue)
+        return queue
+
+    def unsubscribe(self, job_id: str, queue: asyncio.Queue[str | None]) -> None:
+        """Stop listening to the text chunks of a job."""
+        subscribers = self._chunk_subscribers.get(job_id)
+        if not subscribers:
+            return
+        if queue in subscribers:
+            subscribers.remove(queue)
+        if not subscribers:
+            self._chunk_subscribers.pop(job_id, None)
+
+    def _publish_chunk(self, job: InferenceJob, text: str) -> None:
+        """Publish one text chunk of a running job to its listeners."""
+        if not text:
+            return
+        buffered = self._chunk_buffers.setdefault(job.job_id, [])
+        buffered.append(text)
+        for queue in self._chunk_subscribers.get(job.job_id, []):
+            queue.put_nowait(text)
+
+    def _finish_stream(self, job_id: str) -> None:
+        """End the chunk stream of a job: the listeners get their ``None``."""
+        subscribers = self._chunk_subscribers.pop(job_id, [])
+        for queue in subscribers:
+            queue.put_nowait(None)
+        self._chunk_buffers.pop(job_id, None)
 
     def status(self, job_id: str) -> dict[str, Any] | None:
         """Return the JSON view of a job."""

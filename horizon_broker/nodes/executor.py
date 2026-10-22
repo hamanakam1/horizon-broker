@@ -47,6 +47,9 @@ OllamaFactory = Callable[[NodeCapability], OllamaClient]
 FinishedCallback = Callable[[InferenceJob, tuple[int, int] | None], None]
 """Called when a job reaches a terminal state, with the measured token usage."""
 
+ChunkCallback = Callable[[InferenceJob, str], None]
+"""Called with every text piece a running job produces."""
+
 MAX_TRACKED_USAGE = 1_000
 """How many finished token counts are kept for the usage report."""
 
@@ -91,6 +94,7 @@ class JobSupervisor:
         recover: RecoverCallback | None = None,
         metrics: MetricsRegistry | None = None,
         on_finished: FinishedCallback | None = None,
+        on_chunk: ChunkCallback | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.registry = registry
@@ -101,6 +105,7 @@ class JobSupervisor:
         self._recover = recover
         self.metrics = metrics or MetricsRegistry()
         self._on_finished = on_finished
+        self._on_chunk = on_chunk
         self._clock = clock
         self._contexts: dict[str, ExecutionContext] = {}
         self._usage: dict[str, tuple[int, int]] = {}
@@ -219,6 +224,7 @@ class JobSupervisor:
         try:
             async for chunk in client.generate(job.payload):
                 context.chunks.append(chunk.text)
+                self._notify_chunk(context.job, chunk.text)
                 context.tokens_generated += 1
                 if chunk.prompt_eval_count is not None:
                     context.prompt_tokens = chunk.prompt_eval_count
@@ -285,6 +291,7 @@ class JobSupervisor:
             text = event.data.get("text")
             if isinstance(text, str):
                 context.chunks.append(text)
+                self._notify_chunk(context.job, text)
             await self._maybe_checkpoint(context)
         elif event.type is NodeEventType.CHECKPOINT:
             await self._apply_checkpoint(context, event.data)
@@ -292,6 +299,7 @@ class JobSupervisor:
             text = event.data.get("text")
             if isinstance(text, str) and text:
                 context.chunks.append(text)
+                self._notify_chunk(context.job, text)
             if context.phase is ExecutionPhase.PREFILL:
                 await self._handoff_to_decode(context, event.data)
                 return
@@ -505,6 +513,15 @@ class JobSupervisor:
             self._on_finished(job, usage)
         except Exception as exc:  # noqa: BLE001 - a broken waiter must not fail the job
             LOGGER.warning("completion callback failed for job %s: %s", job.job_id, exc)
+
+    def _notify_chunk(self, job: InferenceJob, text: str) -> None:
+        """Tell the engine about one piece of the answer, as it arrives."""
+        if self._on_chunk is None or not text:
+            return
+        try:
+            self._on_chunk(job, text)
+        except Exception as exc:  # noqa: BLE001 - a broken listener must not fail the job
+            LOGGER.warning("chunk callback failed for job %s: %s", job.job_id, exc)
 
     # -- fault handling -----------------------------------------------------
 

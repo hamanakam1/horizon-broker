@@ -186,7 +186,8 @@ curl -sX POST http://127.0.0.1:8791/v1/chat/completions \
  "usage": {"prompt_tokens": 12, "completion_tokens": 4096, "total_tokens": 4108}}
 ```
 
-`"stream": true` returns server-sent events in the OpenAI chunk format.
+`"stream": true` returns server-sent events in the OpenAI chunk format, one
+delta per piece of the answer as the engine produces it.
 Two extension fields let a caller steer the broker: `horizon_priority_tier`
 (`interactive` or `flex`) and `horizon_max_acceptable_latency_ms` (the
 latency budget that decides the tier). Other clients ignore them.

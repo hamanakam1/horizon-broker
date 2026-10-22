@@ -201,6 +201,45 @@ async def test_a_streamed_chat_completion_uses_server_sent_events(config: Any) -
         await server.close()
 
 
+async def test_a_streamed_chat_completion_sends_the_tokens_as_they_arrive(config: Any) -> None:
+    """``stream: true`` must stream.
+
+    The whole answer used to be buffered and emitted as one content delta;
+    a caller that asked for a stream got the same bytes at the end.
+    """
+    server, url = await start_fake_ollama(tokens=("Hi", " there", " friend"))
+    client, engine = await make_client(config, url)
+    await engine.start()
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen2.5:7b",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+        )
+        assert response.status == 200
+        text = await response.text()
+        chunks = [
+            json.loads(line[len("data: ") :])
+            for line in text.splitlines()
+            if line.startswith("data: {")
+        ]
+        contents = [
+            chunk["choices"][0]["delta"].get("content", "")
+            for chunk in chunks
+            if chunk.get("choices")
+        ]
+        # One delta per token, not one delta with the whole answer. The
+        # opening role delta and the closing delta carry no content.
+        assert [piece for piece in contents if piece] == ["Hi", " there", " friend"]
+    finally:
+        await engine.stop()
+        await client.close()
+        await server.close()
+
+
 async def test_the_usage_block_reports_the_measured_tokens(config: Any) -> None:
     """The engine counted the tokens; an estimate would misreport the cost."""
     server, url = await start_fake_ollama(tokens=("Hello", " there"))
