@@ -20,16 +20,20 @@ class JobExpiredError(BrokerError):
     """The job's latency budget elapsed before it could be dispatched."""
 
 
-class NoCapacityError(BrokerError):
+class RoutingError(BrokerError):
+    """The PD-DAG router could not place the job.
+
+    The umbrella for every routing failure: a job that no node can take
+    (:class:`NoCapacityError`) is a routing error too.
+    """
+
+
+class NoCapacityError(RoutingError):
     """No node in the mesh can accept the job right now."""
 
 
 class NodeUnreachableError(BrokerError):
     """The control channel to a node closed or timed out."""
-
-
-class RoutingError(BrokerError):
-    """The PD-DAG router could not place the job."""
 
 
 class LedgerError(BrokerError):

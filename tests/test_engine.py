@@ -12,7 +12,11 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from horizon_broker.contracts.errors import BrokerDrainingError, QueueFullError
+from horizon_broker.contracts.errors import (
+    BrokerDrainingError,
+    QueueFullError,
+    UnknownJobError,
+)
 from horizon_broker.contracts.jobs import PriorityTier
 from horizon_broker.contracts.nodes import PowerClass
 from horizon_broker.contracts.recovery import utcnow
@@ -152,6 +156,13 @@ async def test_an_interactive_job_starts_without_waiting_for_the_poll_tick(confi
     finally:
         await engine.stop()
         await server.close()
+
+
+async def test_an_unknown_job_raises_the_typed_error(config: Any) -> None:
+    """The taxonomy is used, not string-matched."""
+    engine = BrokerEngine(config)
+    with pytest.raises(UnknownJobError):
+        engine.require_status("never-existed")
 
 
 async def test_a_finished_job_cannot_be_cancelled(config: Any) -> None:

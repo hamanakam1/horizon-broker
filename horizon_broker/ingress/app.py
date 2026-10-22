@@ -16,7 +16,11 @@ from aiohttp import web
 from pydantic import ValidationError
 
 from horizon_broker.config import BrokerConfig
-from horizon_broker.contracts.errors import BrokerDrainingError, QueueFullError
+from horizon_broker.contracts.errors import (
+    BrokerDrainingError,
+    QueueFullError,
+    UnknownJobError,
+)
 from horizon_broker.contracts.jobs import InferenceJob, PriorityTier
 from horizon_broker.contracts.nodes import NodeCapability
 from horizon_broker.ingress.openai import (
@@ -108,8 +112,9 @@ async def handle_status(request: web.Request) -> web.Response:
     """``GET /v1/jobs/{job_id}`` -- job status."""
     engine = _engine(request)
     job_id = request.match_info["job_id"]
-    status = engine.status(job_id)
-    if status is None:
+    try:
+        status = engine.require_status(job_id)
+    except UnknownJobError:
         return JSON({"error": "unknown job", "job_id": job_id}, status=404)
     return JSON(status)
 
@@ -136,8 +141,9 @@ async def handle_cancel(request: web.Request) -> web.Response:
     """
     engine = _engine(request)
     job_id = request.match_info["job_id"]
-    status = engine.status(job_id)
-    if status is None:
+    try:
+        status = engine.require_status(job_id)
+    except UnknownJobError:
         return JSON({"error": "unknown job", "job_id": job_id}, status=404)
     if status["state"] in TERMINAL_STATE_NAMES:
         return JSON(

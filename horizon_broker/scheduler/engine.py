@@ -29,8 +29,10 @@ import aiohttp
 from horizon_broker.config import BrokerConfig
 from horizon_broker.contracts.errors import (
     BrokerDrainingError,
+    JobExpiredError,
     NoCapacityError,
     QueueFullError,
+    UnknownJobError,
 )
 from horizon_broker.contracts.jobs import InferenceJob, JobState
 from horizon_broker.contracts.nodes import NodeHealth, PowerClass
@@ -486,6 +488,17 @@ class BrokerEngine:
         payload["assigned_node_id"] = job.assigned_node_id
         return payload
 
+    def require_status(self, job_id: str) -> dict[str, Any]:
+        """Return the JSON view of a job, or raise :class:`UnknownJobError`.
+
+        The ingress maps the typed error onto a 404 without matching on
+        strings.
+        """
+        payload = self.status(job_id)
+        if payload is None:
+            raise UnknownJobError(f"unknown job: {job_id}")
+        return payload
+
     def list_jobs(self, limit: int = 100) -> dict[str, Any]:
         """Return the tracked jobs, newest first.
 
@@ -540,6 +553,7 @@ class BrokerEngine:
                 # Jobs that ran out of latency budget are terminal answers:
                 # they are released to their waiters before anything else.
                 for expired in self.queue.drain_expired():
+                    expired.error = str(JobExpiredError(expired.error or "latency budget expired"))
                     self._on_job_finished(expired)
                 if self._inflight_interactive < self.config.scheduling.interactive_concurrency:
                     job = self.queue.pop_interactive(time.time())
@@ -672,6 +686,11 @@ class BrokerEngine:
     async def _recover(self, job: InferenceJob, node_id: str, reason: str) -> RecoveryOutcome:
         """Recover a job whose node died."""
         outcome = await self.recovery.recover(job, node_id, reason=reason)
+        if outcome.failure is not None:
+            # The typed failure is the operator's answer: it says which
+            # budget was spent, not that something went wrong.
+            job.error = str(outcome.failure)
+            LOGGER.error("recovery of job %s failed: %s", job.job_id, outcome.failure)
         if outcome.dispatched:
             self.metrics.incr("horizon_jobs_recovered_total", resumed=str(outcome.resumed).lower())
         self.metrics.observe("horizon_recovery_seconds", outcome.elapsed_seconds)

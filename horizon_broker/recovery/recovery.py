@@ -21,6 +21,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 
 from horizon_broker.config import RecoveryConfig
+from horizon_broker.contracts.errors import (
+    BrokerError,
+    MaxAttemptsExceededError,
+    RecoveryBudgetExceededError,
+)
 from horizon_broker.contracts.jobs import InferenceJob, JobState, utcnow
 from horizon_broker.contracts.nodes import NodeCapability
 from horizon_broker.recovery.snapshot_store import SnapshotStore
@@ -42,6 +47,8 @@ class RecoveryOutcome:
     within_budget: bool
     dispatched: bool
     excluded_node_ids: frozenset[str]
+    failure: BrokerError | None = None
+    """The typed failure that ended the attempt, if it failed."""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -52,6 +59,7 @@ class RecoveryOutcome:
             "within_budget": self.within_budget,
             "dispatched": self.dispatched,
             "excluded_node_ids": sorted(self.excluded_node_ids),
+            "failure": type(self.failure).__name__ if self.failure else None,
         }
 
 
@@ -92,12 +100,17 @@ class RecoveryCoordinator:
     ) -> RecoveryOutcome:
         """Recover ``job`` after the loss of ``failed_node_id``."""
         started = self._clock()
+        failure: BrokerError | None = None
         self.avoid_node(job.job_id, failed_node_id)
         excluded = self.avoided_nodes(job.job_id)
 
         if job.attempt + 1 >= self.config.max_attempts:
+            failure = MaxAttemptsExceededError(
+                f"max attempts exceeded after {reason} "
+                f"({job.attempt + 1} of {self.config.max_attempts})"
+            )
             job.state = JobState.FAILED
-            job.error = f"max attempts exceeded after {reason}"
+            job.error = str(failure)
             LOGGER.error("job %s failed permanently: %s", job.job_id, job.error)
             return RecoveryOutcome(
                 job_id=job.job_id,
@@ -107,6 +120,7 @@ class RecoveryCoordinator:
                 within_budget=True,
                 dispatched=False,
                 excluded_node_ids=excluded,
+                failure=failure,
             )
 
         snapshot = await self.store.latest_for_job(job.job_id)
@@ -156,12 +170,11 @@ class RecoveryCoordinator:
         elapsed = self._clock() - started
         within_budget = elapsed <= self.config.recovery_budget_seconds
         if not within_budget:
-            LOGGER.error(
-                "recovery for job %s took %.2fs, exceeding the %.2fs budget",
-                job.job_id,
-                elapsed,
-                self.config.recovery_budget_seconds,
+            failure = RecoveryBudgetExceededError(
+                f"recovery for job {job.job_id} took {elapsed:.2f}s, "
+                f"exceeding the {self.config.recovery_budget_seconds:.2f}s budget"
             )
+            LOGGER.error("%s", failure)
         LOGGER.info(
             "recovery for job %s: resumed=%s snapshot=%s elapsed=%.2fs",
             job.job_id,
@@ -177,4 +190,5 @@ class RecoveryCoordinator:
             within_budget=within_budget,
             dispatched=dispatched,
             excluded_node_ids=excluded,
+            failure=failure,
         )

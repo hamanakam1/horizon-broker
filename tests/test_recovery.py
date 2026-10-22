@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from horizon_broker.config import LedgerConfig, RecoveryConfig
-from horizon_broker.contracts.errors import LedgerUnavailableError
+from horizon_broker.contracts.errors import (
+    LedgerUnavailableError,
+    MaxAttemptsExceededError,
+)
 from horizon_broker.contracts.jobs import JobState
 from horizon_broker.contracts.ledger import LedgerCommitReceipt, LedgerRecord
 from horizon_broker.contracts.recovery import (
@@ -253,3 +256,26 @@ async def test_recovered_jobs_increment_the_attempt_counter(tmp_path, attempts: 
     )
     await coordinator.recover(job, "node-a")
     assert job.attempt == attempts + 1
+
+
+async def test_a_spent_attempt_budget_is_a_typed_failure(tmp_path) -> None:
+    """The failures the taxonomy describes must be raised, not written as prose."""
+    store = SnapshotStore(ledger=FakeLedger(), journal=LocalJournal(tmp_path / "journal.jsonl"))
+    job = make_job(attempt=2)
+
+    async def dispatch(job, excluded):
+        return None
+
+    coordinator = RecoveryCoordinator(
+        store=store,
+        config=RecoveryConfig(max_attempts=3),
+        requeue=lambda job: job,
+        dispatch=dispatch,
+    )
+    outcome = await coordinator.recover(job, "node-a")
+
+    assert outcome.dispatched is False
+    assert isinstance(outcome.failure, MaxAttemptsExceededError)
+    assert job.state is JobState.FAILED
+    assert "max attempts exceeded" in (job.error or "")
+    assert outcome.as_dict()["failure"] == "MaxAttemptsExceededError"

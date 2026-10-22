@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.2.0 (alpha) · 160 passing tests · one broker, one fleet
+**Status:** v0.2.0 (alpha) · 169 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
@@ -100,7 +100,7 @@ true. Building throughput on top of that would multiply the damage.
 | 0.8 | Publish quantiles, not just sums | `observability/metrics.py` | **done** — every summary exports p50, p95 and p99 |
 | 0.9 | Repair the documentation drift | `README.md`, `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md` | **done** — the test count, the checkpoint frame and the `extra="forbid"` rule now match the code |
 | 0.10 | Enforce `broker.journal_max_bytes` from YAML and fix the container's journal path | `config.py`, `Dockerfile` | **done** — the limit is read from the file and the container journals into the volume |
-| 0.11 | Raise the errors that are never raised | `contracts/errors.py` | open — the failures still happen silently |
+| 0.11 | Raise the errors that are never raised | `contracts/errors.py`, `scheduler/engine.py`, `recovery/recovery.py` | **done** — the recovery outcome carries the typed failure, `require_status` raises `UnknownJobError`, an expired job is a `JobExpiredError`, and `NoCapacityError` is a `RoutingError` |
 
 **Gate A — the fault-path suite is green.**
 
