@@ -240,6 +240,16 @@ class JobPriorityQueue:
         """Jobs retired because their latency budget elapsed."""
         return list(self._expired)
 
+    def drain_expired(self) -> list[InferenceJob]:
+        """Return the retired jobs and forget them.
+
+        The engine consumes them: a job that ran out of latency budget is a
+        terminal answer that has to reach the caller waiting for it.
+        """
+        expired = self._expired
+        self._expired = []
+        return expired
+
     def pending_flex(self, model: str | None = None) -> list[InferenceJob]:
         """Flex jobs still waiting, optionally filtered by model."""
         if model is None:

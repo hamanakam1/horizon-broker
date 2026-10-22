@@ -64,6 +64,67 @@ def state_of(engine: BrokerEngine, job_id: str) -> str | None:
     return status["state"] if status else None
 
 
+async def test_cancelling_a_job_releases_its_waiter(config: Any) -> None:
+    """A cancelled job answers its waiter instead of hanging it.
+
+    The OpenAI ingress waits on that future; an unresolved one leaves the
+    HTTP client hanging until its own timeout.
+    """
+    engine = BrokerEngine(config)
+    job = make_job(tier=PriorityTier.INTERACTIVE)
+    await engine.submit(job)
+    waiter = asyncio.create_task(engine.wait_for_result(job.job_id))
+    await asyncio.sleep(0)
+
+    assert await engine.cancel(job.job_id) is True
+    assert await asyncio.wait_for(waiter, timeout=1.0) is None
+    assert state_of(engine, job.job_id) == "cancelled"
+
+
+async def test_an_expired_job_releases_its_waiter(config: Any) -> None:
+    """A job that ran out of latency budget is a terminal answer, not silence."""
+    engine = BrokerEngine(config)
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE, max_latency_ms=1)
+        await engine.submit(job)
+        waiter = asyncio.create_task(engine.wait_for_result(job.job_id))
+        assert await asyncio.wait_for(waiter, timeout=2.0) is None
+        assert state_of(engine, job.job_id) == "failed"
+    finally:
+        await engine.stop(drain=False)
+
+
+async def test_the_completion_counter_moves(config: Any) -> None:
+    """``horizon_jobs_completed_total`` must not be a metric that stays at zero."""
+    server, url = await start_fake_ollama()
+    node = make_node("node-a", ollama_url=url)
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        assert await wait_for(lambda: state_of(engine, job.job_id) == "completed")
+        assert engine.metrics.counter("horizon_jobs_completed_total") == 1
+    finally:
+        await engine.stop()
+        await server.close()
+
+
+async def test_the_failure_counter_moves(config: Any) -> None:
+    """A job that cannot reach its node ends in a failure the operator can see."""
+    node = make_node("node-a", ollama_url="http://127.0.0.1:1")
+    engine = BrokerEngine(replace(config, static_nodes=(node,)))
+    await engine.start()
+    try:
+        job = make_job(tier=PriorityTier.INTERACTIVE)
+        await engine.submit(job)
+        assert await wait_for(lambda: state_of(engine, job.job_id) == "failed")
+        assert engine.metrics.counter("horizon_jobs_failed_total") == 1
+    finally:
+        await engine.stop(drain=False)
+
+
 async def test_a_finished_job_cannot_be_cancelled(config: Any) -> None:
     """A completed job must stay completed; DELETE is only a queued/running verb."""
     server, url = await start_fake_ollama()

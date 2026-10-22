@@ -33,7 +33,7 @@ from horizon_broker.contracts.errors import (
     QueueFullError,
 )
 from horizon_broker.contracts.jobs import InferenceJob, JobState
-from horizon_broker.contracts.nodes import NodeHealth
+from horizon_broker.contracts.nodes import NodeHealth, PowerClass
 from horizon_broker.contracts.recovery import utcnow
 from horizon_broker.nodes.executor import JobSupervisor
 from horizon_broker.nodes.manager import NodeConnectionManager
@@ -47,6 +47,7 @@ from horizon_broker.recovery.ledger import EdgeRecordClient
 from horizon_broker.recovery.recovery import RecoveryCoordinator, RecoveryOutcome
 from horizon_broker.recovery.snapshot_store import SnapshotStore
 from horizon_broker.routing.pd_dag import PDDagRouter
+from horizon_broker.routing.placement import NodeSelector
 from horizon_broker.scheduler.batcher import BatchPlanner
 from horizon_broker.scheduler.dispatch import Dispatcher
 from horizon_broker.scheduler.priority_queue import JobPriorityQueue
@@ -79,25 +80,41 @@ class BrokerEngine:
             "horizon_jobs_restored_total", "Jobs replayed from the journal on a cold start."
         )
         self.metrics.describe("horizon_flex_batch_size", "Size of the dispatched Flex batches.")
+        self.metrics.describe("horizon_recovery_seconds", "Seconds from fault to re-dispatch.")
+        self.metrics.describe(
+            "horizon_splits_handed_off_total", "Prefill/decode splits that handed a KV cache over."
+        )
+        # Only the series that are always unlabelled are declared: a declared
+        # zero next to a labelled series would export one metric name with
+        # two shapes. Metrics with a bounded label set are declared per
+        # label, so a dashboard sees them before the first event.
         for metric in (
-            "horizon_jobs_submitted_total",
             "horizon_jobs_completed_total",
             "horizon_jobs_failed_total",
-            "horizon_jobs_recovered_total",
-            "horizon_jobs_restored_total",
             "horizon_jobs_deferred_total",
             "horizon_jobs_duplicate_total",
-            "horizon_flex_batches_total",
             "horizon_splits_handed_off_total",
             "horizon_splits_degraded_total",
+            "horizon_jobs_restored_total",
         ):
             self.metrics.declare(metric)
+        for tier in ("interactive", "flex"):
+            self.metrics.declare("horizon_jobs_submitted_total", tier=tier)
+        for resumed in ("true", "false"):
+            self.metrics.declare("horizon_jobs_recovered_total", resumed=resumed)
+        self.metrics.declare_summary("horizon_recovery_seconds")
 
         self.registry = NodeRegistry()
         for node in config.static_nodes:
             self.registry.upsert(node)
 
-        self.router = PDDagRouter(config=config.routing)
+        self.router = PDDagRouter(
+            selector=NodeSelector(
+                power_gated_classes=self._power_gated_classes(config),
+                power_headroom_threshold=config.window.power_headroom_threshold,
+            ),
+            config=config.routing,
+        )
         self.queue = JobPriorityQueue()
         self.window_policy = WindowPolicy.from_config(config.window)
         self.planner = BatchPlanner(self.router)
@@ -153,8 +170,24 @@ class BrokerEngine:
         self._inflight_interactive = 0
         self._inflight_flex = 0
 
-    # -- lifecycle ----------------------------------------------------------
+    @staticmethod
+    def _power_gated_classes(config: BrokerConfig) -> tuple[PowerClass, ...]:
+        """The power classes that may not take sleep-time work when low.
 
+        An unknown class name is ignored rather than fatal: a typo in the
+        config should not stop the broker from starting.
+        """
+        known = {member.value: member for member in PowerClass}
+        classes: list[PowerClass] = []
+        for name in config.window.power_gated_tiers:
+            member = known.get(name)
+            if member is None:
+                LOGGER.warning("unknown power class in power_gated_tiers: %s", name)
+                continue
+            classes.append(member)
+        return tuple(classes)
+
+    # -- lifecycle ----------------------------------------------------------
     async def start(self) -> None:
         """Start the scheduler loops, the connection manager and the watchdog."""
         if self._running:
@@ -275,7 +308,9 @@ class BrokerEngine:
         if not cancelled:
             self.queue.remove(job_id)
             job.state = JobState.CANCELLED
-        await self._journal_state(job)
+        # A cancellation is a terminal answer: the waiter must be released,
+        # or an OpenAI client hangs until its own timeout.
+        self._on_job_finished(job)
         return True
 
     async def wait_for_result(self, job_id: str, timeout: float | None = None) -> str | None:
@@ -319,6 +354,10 @@ class BrokerEngine:
         """
         if usage is not None:
             self._usage[job.job_id] = usage
+        if job.state is JobState.COMPLETED:
+            self.metrics.incr("horizon_jobs_completed_total")
+        elif job.state is JobState.FAILED:
+            self.metrics.incr("horizon_jobs_failed_total")
         futures = self._waiters.pop(job.job_id, None)
         for future in futures or ():
             if not future.done():
@@ -446,6 +485,10 @@ class BrokerEngine:
         """Dispatch latency-bound work immediately."""
         while self._running:
             try:
+                # Jobs that ran out of latency budget are terminal answers:
+                # they are released to their waiters before anything else.
+                for expired in self.queue.drain_expired():
+                    self._on_job_finished(expired)
                 if self._inflight_interactive < self.config.scheduling.interactive_concurrency:
                     job = self.queue.pop_interactive(time.time())
                     if job is not None:
@@ -538,7 +581,10 @@ class BrokerEngine:
             LOGGER.exception("job %s failed: %s", job.job_id, exc)
             job.state = JobState.FAILED
             job.error = str(exc)
-            self.metrics.incr("horizon_jobs_failed_total")
+            # A failed dispatch is terminal too: the waiter is released and
+            # the terminal envelope is journalled so a restart does not
+            # resurrect the job.
+            self._on_job_finished(job)
 
     # -- recovery hooks -----------------------------------------------------
 

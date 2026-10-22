@@ -218,7 +218,7 @@ Frames exchanged over the node WebSocket:
 | `heartbeat` | node → broker | capability snapshot, power headroom |
 | `assign` | broker → node | the job envelope, `phase` (`prefill`, `decode`, `monolithic`), `resume_point`, `kv_cache_state_id` |
 | `progress` | node → broker | `job_id`, `tokens_generated`, optional text |
-| `checkpoint` | node → broker | `job_id`, `step`, `partial_tokens`, `kv_cache_ref` |
+| `checkpoint` | node → broker | `job_id`, `tokens_generated`, `partial_tokens`, `kv_cache_ref` |
 | `complete` | node → broker | `job_id`, `text`, and for a prefill phase `kv_cache_ref` |
 | `cancel` | broker → node | `job_id` |
 | `draining` | node → broker | the node is about to lose power |
@@ -259,5 +259,7 @@ store answers by reading the local journal instead.
 ## Versioning
 
 Every envelope carries `schema_version`. Within a major version, fields may
-be added but never removed or re-typed; a consumer must ignore unknown
-fields. The JSON Schema files are named `<contract>.v1.json`.
+be added but never removed or re-typed. A consumer must reject an envelope
+that carries a field it does not know: every contract sets `extra="forbid"`,
+so an unknown field is an error rather than something to ignore. Adding a
+field therefore means a new `schema_version` and a new file in `schemas/`.

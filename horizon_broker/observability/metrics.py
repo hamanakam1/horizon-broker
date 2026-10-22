@@ -38,6 +38,16 @@ class MetricsRegistry:
             key = _key(name, labels)
             self._counters.setdefault(key, value)
 
+    def declare_summary(self, name: str, **labels: Any) -> None:
+        """Pre-register a summary (a histogram) so it is exposed when empty.
+
+        A summary must never also appear as a counter: Prometheus gives a
+        metric one type, and two types under one name is a scrape error.
+        """
+        with self._lock:
+            key = _key(name, labels)
+            self._histograms.setdefault(key, [])
+
     def incr(self, name: str, value: float = 1.0, **labels: Any) -> None:
         with self._lock:
             self._counters[_key(name, labels)] += value
@@ -69,8 +79,14 @@ class MetricsRegistry:
             return total
 
     def histogram(self, name: str) -> list[float]:
+        """Every observation of ``name``, across all label combinations."""
         with self._lock:
-            return list(self._histograms.get(name, []))
+            observations: list[float] = []
+            for key, values in self._histograms.items():
+                metric_name, _ = _split(key)
+                if metric_name == name:
+                    observations.extend(values)
+            return observations
 
     # -- rendering ----------------------------------------------------------
 
@@ -111,6 +127,12 @@ class MetricsRegistry:
                 for label_text, observations in entries:
                     lines.append(f"{name}_count{label_text} {len(observations)}")
                     lines.append(f"{name}_sum{label_text} {sum(observations):.6f}")
+                    # The runbook asks for percentiles, not just a mean: a
+                    # sum cannot answer "did the recovery stay under 30 s".
+                    for quantile, value in _quantiles(observations):
+                        lines.append(
+                            f"{name}{_with_quantile(label_text, quantile)} {value:.6f}"
+                        )
         return "\n".join(lines) + "\n"
 
 
@@ -142,3 +164,28 @@ def _parse_key(key: str) -> tuple[str, dict[str, str]]:
         key_name, _, value = pair.partition("=")
         labels[key_name.strip()] = value.strip().strip('"')
     return name, labels
+
+
+QUANTILES = (("0.5", 0.5), ("0.95", 0.95), ("0.99", 0.99))
+"""The percentiles the broker publishes for every summary."""
+
+
+def _quantiles(observations: list[float]) -> list[tuple[str, float]]:
+    """Return the (label, value) pairs of the published percentiles."""
+    if not observations:
+        return []
+    ordered = sorted(observations)
+    result: list[tuple[str, float]] = []
+    for label, quantile in QUANTILES:
+        index = min(len(ordered) - 1, max(0, int(round(quantile * (len(ordered) - 1)))))
+        result.append((label, ordered[index]))
+    return result
+
+
+def _with_quantile(label_text: str, quantile: str) -> str:
+    """Add a ``quantile`` label to an existing label set."""
+    addition = f'quantile="{quantile}"'
+    inner = label_text.strip("{}")
+    if inner:
+        return "{" + f"{inner},{addition}" + "}"
+    return "{" + addition + "}"

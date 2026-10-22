@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.2.0 (alpha) · 131 passing tests · one broker, one fleet
+**Status:** v0.2.0 (alpha) · 160 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
@@ -25,12 +25,12 @@ What is *not* real yet:
 
 | Claim in the docs | Reality |
 | --- | --- |
-| "a failed node is quarantined for `recovery.quarantine_seconds`" | the quarantine never expires — the node is lost for the life of the process (`horizon_broker/routing/placement.py:51`) |
-| "the broker drains: in-flight jobs finish before exit" | the drain ignores flex work and never awaits the per-job tasks (`horizon_broker/scheduler/engine.py:200`, `:341`) |
-| "the queue is recoverable from the journal" | the replay path exists but nothing calls it (`horizon_broker/recovery/snapshot_store.py:136`) |
-| "the broker batches work so the node amortises the weight load" | the "batch" is N independent single-prompt HTTP requests (`horizon_broker/scheduler/engine.py:401`) |
-| "covered by tests (85 of them)" | there are 131 (`README.md:206`) |
-| `horizon_jobs_completed_total` | declared, exported, and never incremented — it is always `0.0` (`horizon_broker/scheduler/engine.py:75`) |
+| "a failed node is quarantined for `recovery.quarantine_seconds`" | **fixed** — the quarantine expires, placement honours it and the watchdog returns a recovered node to the fleet (`horizon_broker/routing/placement.py`, `horizon_broker/nodes/watchdog.py`) |
+| "the broker drains: in-flight jobs finish before exit" | still open — the drain ignores flex work and never awaits the per-job tasks (`horizon_broker/scheduler/engine.py`) |
+| "the queue is recoverable from the journal" | **fixed** — a cold start replays every non-terminal job from the journal (`horizon_broker/recovery/snapshot_store.py`, `horizon_broker/scheduler/engine.py`) |
+| "the broker batches work so the node amortises the weight load" | still open — the "batch" is N independent single-prompt HTTP requests (Phase 1.1) |
+| "covered by tests (85 of them)" | **fixed** — the README carries the real count (160) |
+| `horizon_jobs_completed_total` | **fixed** — the counter moves, and every summary publishes p50/p95/p99 instead of a bare sum (`horizon_broker/observability/metrics.py`) |
 
 That gap between the documentation and the behaviour is the reason this
 plan starts with correctness and not with features. A broker that loses a node
@@ -90,17 +90,17 @@ true. Building throughput on top of that would multiply the damage.
 
 | # | Item | Where | Why it matters |
 | --- | --- | --- | --- |
-| 0.1 | Expire the quarantine | `routing/placement.py:51`, `nodes/registry.py:76` | a node that failed once never returns to the fleet; `recovery.quarantine_seconds` is a dead setting |
-| 0.2 | Store health as `NodeHealth`, not `str` | `nodes/executor.py:254`, `nodes/registry.py:59` | `model_copy(update=…)` skips validation, so a WS `draining` frame stores the string `"draining"`; the watchdog branches on identity, so the drain/migration path is unreachable |
-| 0.3 | Resolve the waiter on every terminal path | `scheduler/engine.py:249`, `:284`, `:425`; `scheduler/priority_queue.py:165` | failure, cancellation and expiry never resolve the `asyncio.Future`, so an OpenAI client hangs until its timeout |
-| 0.4 | Do not fail a job on a transient socket error | `nodes/connection.py:134` → `nodes/executor.py:299` | a one-second reconnect attempt is attributed to the running job and fails it instead of letting the watchdog declare the node LOST |
-| 0.5 | Gate power per node, not per fleet | `scheduler/engine.py:493`, `routing/placement.py:32` | a solar trailer at 5 % headroom can still be selected while another node has headroom; `NodeSelector.power_gated_classes` is constructed empty, so the power penalty is unreachable |
-| 0.6 | Keep `window.power_gated_tiers` when YAML omits it | `config.py:328` | any config file with a `window:` section silently disables power gating |
-| 0.7 | Make the metrics true | `scheduler/engine.py:75`, `:87`; `observability/metrics.py:35` | increment `horizon_jobs_completed_total`; declare `horizon_recovery_seconds` and `horizon_splits_handed_off_total`; stop emitting an unlabelled and a labelled series under one metric name |
-| 0.8 | Publish quantiles, not just sums | `observability/metrics.py:85` | the runbook says "recovery should stay under 30 s" but only `_count`/`_sum` are exported |
-| 0.9 | Repair the documentation drift | `README.md:206`, `docs/CONTRACTS.md:221`, `docs/ARCHITECTURE.md:23` | 131 tests not 85; the checkpoint frame carries `tokens_generated`, not `step`; the contracts say to ignore unknown fields while every contract sets `extra="forbid"` |
-| 0.10 | Enforce `broker.journal_max_bytes` from YAML and fix the container's journal path | `config.py:354`, `Dockerfile:20` | the setting is ignored, and the container writes its journal outside the mounted volume, so compose deployments persist no recovery state |
-| 0.11 | Raise the errors that are never raised | `contracts/errors.py` | `UnknownJobError`, `JobExpiredError`, `RoutingError`, `RecoveryBudgetExceededError` and `MaxAttemptsExceededError` exist but are never raised; the failures they describe happen silently |
+| 0.1 | Expire the quarantine | `routing/placement.py`, `nodes/registry.py`, `nodes/watchdog.py` | **done** — a node that failed once returns to the fleet when its cooling-off period ends |
+| 0.2 | Store health as `NodeHealth`, not `str` | `nodes/executor.py` | **done** — a WS `draining` frame stores the enum, so the drain/migration path is reachable |
+| 0.3 | Resolve the waiter on every terminal path | `scheduler/engine.py`, `scheduler/priority_queue.py` | **done** — completion, failure, cancellation and expiry all release the waiter |
+| 0.4 | Do not fail a job on a transient socket error | `nodes/executor.py` | **done** — an unreachable socket is the watchdog's verdict, not the job's ending |
+| 0.5 | Gate power per node, not per fleet | `scheduler/engine.py`, `routing/placement.py` | **done** — a solar trailer below the threshold is skipped for Flex work only |
+| 0.6 | Keep `window.power_gated_tiers` when YAML omits it | `config.py` | **done** — a config file with a `window:` section no longer disables power gating |
+| 0.7 | Make the metrics true | `scheduler/engine.py`, `observability/metrics.py` | **done** — the counters move, the missing metrics are declared, and no metric name carries two shapes |
+| 0.8 | Publish quantiles, not just sums | `observability/metrics.py` | **done** — every summary exports p50, p95 and p99 |
+| 0.9 | Repair the documentation drift | `README.md`, `docs/CONTRACTS.md`, `docs/ARCHITECTURE.md` | **done** — the test count, the checkpoint frame and the `extra="forbid"` rule now match the code |
+| 0.10 | Enforce `broker.journal_max_bytes` from YAML and fix the container's journal path | `config.py`, `Dockerfile` | **done** — the limit is read from the file and the container journals into the volume |
+| 0.11 | Raise the errors that are never raised | `contracts/errors.py` | open — the failures still happen silently |
 
 **Gate A — the fault-path suite is green.**
 

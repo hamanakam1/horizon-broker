@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from horizon_broker.config import HeartbeatConfig, RecoveryConfig
-from horizon_broker.contracts.nodes import NodeHealth
+from horizon_broker.contracts.nodes import NodeCapability, NodeHealth
 from horizon_broker.nodes.registry import NodeRegistry
 
 LOGGER = logging.getLogger(__name__)
@@ -67,7 +67,21 @@ class FaultWatchdog:
         current = now or utcnow()
         declared: list[str] = []
         for node in self.registry.all():
-            if node.health is NodeHealth.LOST or node.health is NodeHealth.OFFLINE:
+            if node.health is NodeHealth.LOST:
+                # A node that failed once is quarantined, not exiled: when the
+                # cooling-off period ends and the node answers again, it is
+                # part of the fleet.
+                if self._quarantine_expired(node, current) and self._is_responsive(node, current):
+                    LOGGER.info(
+                        "node %s returned to the fleet after its quarantine expired",
+                        node.node_id,
+                    )
+                    self.registry.mark_health(
+                        node.node_id, NodeHealth.HEALTHY, "quarantine expired"
+                    )
+                    self.registry.clear_quarantine(node.node_id)
+                continue
+            if node.health is NodeHealth.OFFLINE:
                 continue
             if node.health is NodeHealth.DRAINING:
                 if self._on_node_draining is not None:
@@ -93,3 +107,16 @@ class FaultWatchdog:
             if self._on_node_lost is not None:
                 await self._on_node_lost(node.node_id, reason)
         return declared
+
+    def _quarantine_expired(self, node: NodeCapability, current: datetime) -> bool:
+        """True when the node is no longer inside its cooling-off period."""
+        if node.quarantined_until is None:
+            return True
+        return node.quarantined_until <= current
+
+    def _is_responsive(self, node: NodeCapability, current: datetime) -> bool:
+        """True when the node has been heard from inside the heartbeat budget."""
+        last_seen = node.last_heartbeat_at or self.registry.registered_at(node.node_id)
+        if last_seen is None:
+            return False
+        return (current - last_seen).total_seconds() < self.config.timeout_seconds

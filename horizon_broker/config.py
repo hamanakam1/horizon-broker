@@ -327,7 +327,14 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
 
     window = data.get("window")
     if isinstance(window, dict):
-        window = {**window, "power_gated_tiers": tuple(window.get("power_gated_tiers", ()))}
+        # An omitted key keeps the default; a config file that only tunes
+        # the window length must not switch power gating off.
+        window = {
+            **window,
+            "power_gated_tiers": tuple(
+                window.get("power_gated_tiers", config.window.power_gated_tiers)
+            ),
+        }
         config = replace(config, window=replace(config.window, **window))
 
     scheduling = data.get("scheduling")
@@ -359,6 +366,9 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
             port=int(broker.get("port", config.port)),
             log_level=broker.get("log_level", config.log_level),
             journal_path=broker.get("journal_path", config.journal_path),
+            journal_max_bytes=int(
+                broker.get("journal_max_bytes", config.journal_max_bytes)
+            ),
             drain_timeout_seconds=float(
                 broker.get("drain_timeout_seconds", config.drain_timeout_seconds)
             ),

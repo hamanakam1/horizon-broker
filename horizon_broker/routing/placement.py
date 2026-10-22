@@ -8,9 +8,14 @@ compute) power headroom.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from horizon_broker.contracts.nodes import NodeCapability, NodeHealth, NodeRole, PowerClass
 from horizon_broker.routing.arithmetic import ArithmeticProfile, ModelProfile
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass(frozen=True)
@@ -29,8 +34,14 @@ class NodeSelector:
     performs I/O, which keeps routing decisions testable and reproducible.
     """
 
-    def __init__(self, *, power_gated_classes: tuple[PowerClass, ...] = ()) -> None:
+    def __init__(
+        self,
+        *,
+        power_gated_classes: tuple[PowerClass, ...] = (),
+        power_headroom_threshold: float = 0.25,
+    ) -> None:
         self.power_gated_classes = power_gated_classes
+        self.power_headroom_threshold = power_headroom_threshold
 
     def eligible(
         self,
@@ -40,15 +51,20 @@ class NodeSelector:
         required_role: NodeRole | None = None,
         excluded: frozenset[str] = frozenset(),
         require_memory_bytes: int = 0,
+        flex_tier: bool = False,
+        now: datetime | None = None,
     ) -> list[NodeCapability]:
         """Filter the fleet down to nodes that may accept the job."""
+        current = now or utcnow()
         candidates: list[NodeCapability] = []
         for node in nodes:
             if node.node_id in excluded:
                 continue
             if node.health in (NodeHealth.LOST, NodeHealth.OFFLINE):
                 continue
-            if node.quarantined_until is not None:
+            # The quarantine is a cooling-off period: once it has expired the
+            # node is part of the fleet again.
+            if node.quarantined_until is not None and node.quarantined_until > current:
                 continue
             if not node.supports_model(model):
                 continue
@@ -58,8 +74,16 @@ class NodeSelector:
                 continue
             if required_role is not None and node.role is not required_role:
                 continue
+            if flex_tier and self._power_gated(node):
+                # Sleep-time work waits for the sun; interactive work does not.
+                if node.power_headroom < self.power_headroom_threshold:
+                    continue
             candidates.append(node)
         return candidates
+
+    def _power_gated(self, node: NodeCapability) -> bool:
+        """True when this node's power class is gated for sleep-time work."""
+        return node.power_class in self.power_gated_classes
 
     def score(
         self,
@@ -98,7 +122,7 @@ class NodeSelector:
         if flex_tier:
             total += 2.0 * node.power_headroom
             reasons.append(f"power-headroom={node.power_headroom:.2f}")
-            if node.power_class in self.power_gated_classes and node.power_headroom <= 0.0:
+            if self._power_gated(node) and node.power_headroom < self.power_headroom_threshold:
                 total -= 100.0
                 reasons.append("power-gated-off")
 
@@ -128,6 +152,7 @@ class NodeSelector:
             required_role=required_role,
             excluded=excluded,
             require_memory_bytes=0,
+            flex_tier=flex_tier,
         )
         if not candidates:
             return None

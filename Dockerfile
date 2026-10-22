@@ -24,7 +24,9 @@ USER horizon
 # exiting exactly at the first health check.
 RUN test -f /app/config/broker.yaml || cp /app/config/broker.example.yaml /app/config/broker.yaml
 
-ENV JOURNAL_PATH=/var/lib/horizon-broker/journal.jsonl
+# The journal belongs in the mounted volume: the compose stack persists
+# /var/lib/horizon-broker, and the config layer only reads HORIZON_BROKER_*.
+ENV HORIZON_BROKER_JOURNAL_PATH=/var/lib/horizon-broker/journal.jsonl
 EXPOSE 8791
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

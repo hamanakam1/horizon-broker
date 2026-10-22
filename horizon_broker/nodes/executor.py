@@ -26,7 +26,7 @@ from typing import Any
 
 from horizon_broker.config import RecoveryConfig
 from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState
-from horizon_broker.contracts.nodes import ExecutionMode, NodeCapability
+from horizon_broker.contracts.nodes import ExecutionMode, NodeCapability, NodeHealth
 from horizon_broker.contracts.recovery import FaultRecoverySnapshot, PartialToken, ResumePoint
 from horizon_broker.nodes.connection import NodeEvent, NodeEventType
 from horizon_broker.nodes.registry import NodeRegistry
@@ -251,7 +251,7 @@ class JobSupervisor:
             return
         if event.type is NodeEventType.DRAINING:
             LOGGER.warning("node %s announced draining", event.node_id)
-            self.registry.mark_health(event.node_id, event.data.get("health", "draining"))
+            self.registry.mark_health(event.node_id, self._health_from(event.data))
             return
 
         job_id = event.data.get("job_id")
@@ -297,7 +297,31 @@ class JobSupervisor:
                 return
             await self._complete(context, context.text)
         elif event.type is NodeEventType.ERROR:
+            if event.data.get("kind") == "unreachable":
+                # The socket dropped; the connection retries with a backoff and
+                # the watchdog decides whether the node is lost. Failing the
+                # job here would throw away work the node may still be doing.
+                LOGGER.warning(
+                    "node %s is unreachable; the watchdog decides its fate", event.node_id
+                )
+                return
             await self._fail(context, str(event.data.get("error", "node reported an error")))
+
+    @staticmethod
+    def _health_from(data: dict[str, Any]) -> NodeHealth:
+        """Read a health verdict from a frame.
+
+        A verdict is an enum: storing the raw text would make every
+        identity check (``health is NodeHealth.DRAINING``) fail.
+        """
+        raw = data.get("health", "draining")
+        if isinstance(raw, NodeHealth):
+            return raw
+        if isinstance(raw, str):
+            for health in NodeHealth:
+                if health.value == raw:
+                    return health
+        return NodeHealth.DRAINING
 
     def _apply_capabilities(self, node_id: str, data: dict[str, Any]) -> None:
         """Update the registry from a heartbeat payload."""

@@ -93,6 +93,21 @@ routing:
     )
 
 
+def test_power_gated_tiers_survive_a_config_file_that_omits_them(tmp_path: Path) -> None:
+    """A config file with a ``window:`` section must not switch power gating off."""
+    path = write_config(tmp_path, "window:\n  window_seconds: 30\n")
+    config = load_config(path)
+    assert config.window.power_gated_tiers == BrokerConfig().window.power_gated_tiers
+    assert config.window.power_gated_tiers != ()
+
+
+def test_the_journal_max_bytes_is_read_from_the_file(tmp_path: Path) -> None:
+    """The journal size limit is a documented setting; it must be honoured."""
+    path = write_config(tmp_path, "broker:\n  journal_max_bytes: 1024\n")
+    config = load_config(path)
+    assert config.journal_max_bytes == 1024
+
+
 def test_the_check_config_command_accepts_a_good_file(tmp_path: Path, capsys) -> None:
     path = write_config(tmp_path, "broker:\n  port: 9000\n")
     assert main(["check-config", "--config", str(path)]) == 0

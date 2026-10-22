@@ -63,6 +63,28 @@ async def test_a_draining_node_is_migrated_without_being_lost() -> None:
     assert registry.get("trailer-01").health is NodeHealth.DRAINING
 
 
+async def test_a_node_returns_to_the_fleet_after_its_quarantine_expires() -> None:
+    """A node that served out its cooling-off period is usable again.
+
+    The quarantine is a setting with a duration; a node that failed once
+    must not be lost for the life of the process.
+    """
+    registry = NodeRegistry()
+    node = make_node("pi-01").model_copy(
+        update={
+            "health": NodeHealth.LOST,
+            "quarantined_until": utcnow() - timedelta(seconds=1),
+        }
+    )
+    registry.upsert(node)
+    registry.record_heartbeat("pi-01", utcnow())
+
+    watchdog = FaultWatchdog(registry)
+    assert await watchdog.scan() == []
+    assert registry.get("pi-01").health is NodeHealth.HEALTHY
+    assert not registry.is_quarantined("pi-01")
+
+
 async def _record(sink: list[tuple[str, str]], node_id: str, reason: str) -> None:
     sink.append((node_id, reason))
 

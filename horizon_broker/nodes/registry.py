@@ -82,6 +82,13 @@ class NodeRegistry:
             update={"quarantined_until": utcnow() + timedelta(seconds=seconds)}
         )
 
+    def clear_quarantine(self, node_id: str) -> None:
+        """Lift the quarantine; the node may take work again."""
+        node = self._nodes.get(node_id)
+        if node is None or node.quarantined_until is None:
+            return
+        self._nodes[node_id] = node.model_copy(update={"quarantined_until": None})
+
     def is_quarantined(self, node_id: str, now: datetime | None = None) -> bool:
         """True while the node is excluded from placement."""
         node = self._nodes.get(node_id)
