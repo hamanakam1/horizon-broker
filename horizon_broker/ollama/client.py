@@ -97,13 +97,23 @@ class OllamaClient:
         *,
         model: str | None = None,
     ) -> AsyncIterator[GenerationChunk]:
-        """Stream a completion for ``payload``."""
+        """Stream a completion for ``payload``.
+
+        A payload with chat messages is sent to ``/api/chat`` so the model's
+        own chat template is applied; a flat prompt goes to ``/api/generate``.
+        Flattening a conversation by hand would silently change the prompt.
+        """
         session = await self._get_session()
-        body = payload.to_engine_request(model_override=model)
+        if payload.messages:
+            body = payload.to_chat_request(model_override=model)
+            endpoint = "/api/chat"
+        else:
+            body = payload.to_engine_request(model_override=model)
+            endpoint = "/api/generate"
         body["keep_alive"] = self.keep_alive
         timeout = aiohttp.ClientTimeout(total=None)
         async with session.post(
-            f"{self.base_url}/api/generate", json=body, timeout=timeout
+            f"{self.base_url}{endpoint}", json=body, timeout=timeout
         ) as response:
             if response.status != 200:
                 detail = await response.text()
@@ -116,8 +126,12 @@ class OllamaClient:
                     chunk = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                message = chunk.get("message")
+                text = str(chunk.get("response", ""))
+                if not text and isinstance(message, dict):
+                    text = str(message.get("content", ""))
                 yield GenerationChunk(
-                    text=str(chunk.get("response", "")),
+                    text=text,
                     done=bool(chunk.get("done", False)),
                     done_reason=chunk.get("done_reason"),
                     prompt_eval_count=chunk.get("prompt_eval_count"),

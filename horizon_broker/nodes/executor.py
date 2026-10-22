@@ -44,6 +44,7 @@ MAX_PARTIAL_TOKENS = 512
 RecoverCallback = Callable[[InferenceJob, str, str], Awaitable[RecoveryOutcome]]
 AssignCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 OllamaFactory = Callable[[NodeCapability], OllamaClient]
+FinishedCallback = Callable[[InferenceJob], None]
 
 
 @dataclass
@@ -81,6 +82,7 @@ class JobSupervisor:
         assign: AssignCallback | None = None,
         recover: RecoverCallback | None = None,
         metrics: MetricsRegistry | None = None,
+        on_finished: FinishedCallback | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.registry = registry
@@ -90,6 +92,7 @@ class JobSupervisor:
         self._assign = assign
         self._recover = recover
         self.metrics = metrics or MetricsRegistry()
+        self._on_finished = on_finished
         self._clock = clock
         self._contexts: dict[str, ExecutionContext] = {}
 
@@ -430,6 +433,7 @@ class JobSupervisor:
         self.registry.release_job(context.node_id, job.job_id)
         if self._contexts.get(job.job_id) is context:
             self._contexts.pop(job.job_id, None)
+        self._notify_finished(job)
 
     async def _fail(self, context: ExecutionContext, message: str) -> None:
         job = context.job
@@ -438,6 +442,16 @@ class JobSupervisor:
         self.registry.release_job(context.node_id, job.job_id)
         if self._contexts.get(job.job_id) is context:
             self._contexts.pop(job.job_id, None)
+        self._notify_finished(job)
+
+    def _notify_finished(self, job: InferenceJob) -> None:
+        """Tell the engine that the job reached a terminal state."""
+        if self._on_finished is None:
+            return
+        try:
+            self._on_finished(job)
+        except Exception as exc:  # noqa: BLE001 - a broken waiter must not fail the job
+            LOGGER.warning("completion callback failed for job %s: %s", job.job_id, exc)
 
     # -- fault handling -----------------------------------------------------
 

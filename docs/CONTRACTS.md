@@ -164,6 +164,46 @@ The envelope the broker writes to EdgeRecord. `LedgerRecord.payload` holds the
 snapshot body; `content_hash` guards the payload; `LedgerCommitReceipt` is the
 proof of a durable commit.
 
+## The OpenAI-compatible surface
+
+`POST /v1/chat/completions` accepts an OpenAI chat-completions body:
+
+```json
+{
+  "model": "qwen2.5:7b",
+  "messages": [{"role": "user", "content": "hello"}],
+  "max_tokens": 128,
+  "temperature": 0.2,
+  "top_p": 0.95,
+  "stop": ["END"],
+  "seed": 7,
+  "stream": false
+}
+```
+
+and answers with the OpenAI completion object, or with server-sent events
+when `stream` is true:
+
+```text
+data: {"id": "chatcmpl-...","object": "chat.completion.chunk", ...}
+data: {"id": "chatcmpl-...","object": "chat.completion.chunk", "choices": [{"delta": {"content": "..."}}]}
+data: {"id": "chatcmpl-...","object": "chat.completion.chunk", "choices": [{"delta": {}, "finish_reason": "stop"}]}
+data: [DONE]
+```
+
+Two extension fields steer the broker and are ignored by other clients:
+
+| Field | Meaning |
+| --- | --- |
+| `horizon_priority_tier` | `interactive` or `flex` |
+| `horizon_max_acceptable_latency_ms` | The latency budget; above 120 s the request becomes Flex work |
+| `horizon_timeout_seconds` | How long the caller waits for the answer |
+
+The `system` message is preserved as a separate field, and a payload with
+chat messages is sent to the engine's chat endpoint so the model's own chat
+template applies. Flattening a conversation by hand would silently change
+the prompt.
+
 ## The node control channel
 
 Frames exchanged over the node WebSocket:

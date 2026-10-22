@@ -79,9 +79,39 @@ stops accepting work, finishes the in-flight jobs (up to
 
 ## Use
 
-Submit work. The broker categorises it: a latency budget at or below
-`interactive_latency_threshold_ms` (2 s by default) is dispatched immediately,
-anything slower is sleep-time compute.
+### The OpenAI-compatible way (drop-in)
+
+Agents, SDKs and CLIs already speak the OpenAI chat-completions API. Point
+their base URL at the broker and the request is queued, categorised and
+routed like any other work:
+
+```sh
+curl -sX POST http://127.0.0.1:8791/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+        "model": "qwen2.5:7b",
+        "messages": [{"role": "user", "content": "Map every call site of the ingestion pipeline"}],
+        "max_tokens": 4096
+      }'
+```
+
+```json
+{"id": "chatcmpl-0f2c...","object": "chat.completion",
+ "choices": [{"index": 0, "message": {"role": "assistant", "content": "..."},
+              "finish_reason": "stop"}],
+ "usage": {"prompt_tokens": 12, "completion_tokens": 4096, "total_tokens": 4108}}
+```
+
+`"stream": true` returns server-sent events in the OpenAI chunk format.
+Two extension fields let a caller steer the broker: `horizon_priority_tier`
+(`interactive` or `flex`) and `horizon_max_acceptable_latency_ms` (the
+latency budget that decides the tier). Other clients ignore them.
+
+### The native API
+
+Submit work directly. The broker categorises it: a latency budget at or
+below `interactive_latency_threshold_ms` (2 s by default) is dispatched
+immediately, anything slower is sleep-time compute.
 
 ```sh
 curl -sX POST http://127.0.0.1:8791/v1/jobs \
@@ -111,6 +141,8 @@ curl -s http://127.0.0.1:8791/v1/jobs/0f2c... | python3 -m json.tool
 
 | Route | Purpose |
 | --- | --- |
+| `POST /v1/chat/completions` | OpenAI-compatible completion (streaming or not) |
+| `GET /v1/models` | The models the mesh can serve |
 | `POST /v1/jobs` | Submit a job (202 + `job_id`); 429 when the queue is full, 503 while draining |
 | `GET /v1/jobs/{job_id}` | Job status and result |
 | `DELETE /v1/jobs/{job_id}` | Cancel queued or running work |

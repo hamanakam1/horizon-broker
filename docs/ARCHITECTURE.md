@@ -163,6 +163,13 @@ consumes it. Two degradations are explicit rather than silent:
 
 ## Lifecycle guarantees
 
+**Two ingresses, one queue.** `POST /v1/chat/completions` speaks the OpenAI
+shape so an existing agent can point at the broker unchanged;
+`POST /v1/jobs` speaks the native shape. Both produce the same
+`InferenceJob`, so both lanes, both routers and both recovery paths are
+shared. The OpenAI ingress waits for the job to finish and answers in the
+OpenAI shape, streamed or not.
+
 **Idempotent submission.** A repeated `job_id` returns the job that is
 already known. A caller that retries after a timeout cannot double-execute.
 
@@ -233,6 +240,16 @@ node   ──draining──▶ broker   (low voltage: migrate the work now)
 
 Any socket close, or silence longer than `heartbeat.timeout_seconds`, is a
 node loss.
+
+### Nodes without a control channel
+
+A node that runs Ollama directly has no WebSocket to heartbeat over. Without
+a probe the watchdog would see silence, declare the node lost and quarantine
+it — which is exactly how the M3 Max once disappeared from its own mesh. The
+`NodeHealthProbe` asks the engine a cheap question (`GET /api/version`) on
+the heartbeat interval and records the answer as a heartbeat, so a direct node
+is detected exactly like an agent container: a node that stops answering
+falls silent in the registry and the watchdog takes over.
 
 ## Recovery semantics
 

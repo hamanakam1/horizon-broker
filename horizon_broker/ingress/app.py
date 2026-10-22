@@ -18,6 +18,14 @@ from horizon_broker.config import BrokerConfig
 from horizon_broker.contracts.errors import BrokerDrainingError, QueueFullError
 from horizon_broker.contracts.jobs import InferenceJob, PriorityTier
 from horizon_broker.contracts.nodes import NodeCapability
+from horizon_broker.ingress.openai import (
+    DONE,
+    OpenAITranslationError,
+    chat_request_to_job,
+    chunk_object,
+    completion_object,
+    sse,
+)
 from horizon_broker.scheduler.engine import BrokerEngine
 
 LOGGER = logging.getLogger(__name__)
@@ -158,6 +166,86 @@ async def handle_healthz(request: web.Request) -> web.Response:
     return JSON({"status": "ok"})
 
 
+async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
+    """``POST /v1/chat/completions`` -- the OpenAI-compatible ingress.
+
+    An agent can point its OpenAI base URL at the broker: the request is
+    queued like any other work and the answer comes back in the OpenAI
+    shape, streamed or not.
+    """
+    engine = _engine(request)
+    config = _config(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSON({"error": {"message": "body must be valid JSON"}}, status=400)
+    try:
+        job = chat_request_to_job(body)
+    except OpenAITranslationError as exc:
+        return JSON({"error": {"message": str(exc)}}, status=422)
+
+    timeout = body.get("horizon_timeout_seconds")
+    wait_for = float(timeout) if isinstance(timeout, (int, float)) and timeout > 0 else None
+    try:
+        await engine.submit(job)
+    except QueueFullError as exc:
+        return JSON({"error": {"message": str(exc), "type": "queue_full"}}, status=429)
+    except BrokerDrainingError as exc:
+        return JSON({"error": {"message": str(exc), "type": "broker_draining"}}, status=503)
+
+    text = await engine.wait_for_result(job.job_id, timeout=wait_for)
+    if text is None:
+        status = engine.status(job.job_id) or {}
+        return JSON(
+            {
+                "error": {
+                    "message": status.get("error") or "the job did not produce a result",
+                    "type": "job_failed",
+                    "job_id": job.job_id,
+                }
+            },
+            status=504 if status.get("state") not in ("failed", "cancelled") else 500,
+        )
+
+    prompt_tokens = job.payload.estimated_prompt_tokens
+    completion_tokens = max(1, len(text) // 4)
+    if body.get("stream"):
+        response = web.StreamResponse(
+            status=200, headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"}
+        )
+        await response.prepare(request)
+        await response.write(sse(chunk_object(job, delta={"role": "assistant", "content": ""})))
+        await response.write(sse(chunk_object(job, delta={"content": text})))
+        await response.write(sse(chunk_object(job, delta={}, finish_reason="stop")))
+        await response.write(DONE)
+        await response.write_eof()
+        return response
+
+    payload = completion_object(
+        job,
+        text,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+    if config.log_level.upper() == "DEBUG":
+        LOGGER.debug("openai completion for job %s", job.job_id)
+    return JSON(payload)
+
+
+async def handle_models(request: web.Request) -> web.Response:
+    """``GET /v1/models`` -- the models the mesh can serve."""
+    engine = _engine(request)
+    models: set[str] = set()
+    for node in engine.registry.healthy_nodes():
+        models.update(node.model_whitelist)
+    return JSON(
+        {
+            "object": "list",
+            "data": [{"id": model, "object": "model", "owned_by": "horizon-broker"} for model in sorted(models)],
+        }
+    )
+
+
 async def handle_readyz(request: web.Request) -> web.Response:
     """``GET /readyz`` -- readiness: at least one node is reachable."""
     engine = _engine(request)
@@ -191,6 +279,8 @@ def create_app(engine: BrokerEngine, config: BrokerConfig) -> web.Application:
     app.router.add_post("/v1/nodes/{node_id}/heartbeat", handle_heartbeat)
     app.router.add_get("/v1/queue", handle_queue)
     app.router.add_get("/v1/config", handle_config)
+    app.router.add_post("/v1/chat/completions", handle_chat_completions)
+    app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/healthz", handle_healthz)
     app.router.add_get("/readyz", handle_readyz)
     app.router.add_get("/metrics", handle_metrics)

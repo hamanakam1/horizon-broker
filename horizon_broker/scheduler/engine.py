@@ -37,6 +37,7 @@ from horizon_broker.contracts.nodes import NodeHealth
 from horizon_broker.contracts.recovery import utcnow
 from horizon_broker.nodes.executor import JobSupervisor
 from horizon_broker.nodes.manager import NodeConnectionManager
+from horizon_broker.nodes.probe import NodeHealthProbe
 from horizon_broker.nodes.registry import NodeRegistry
 from horizon_broker.nodes.watchdog import FaultWatchdog
 from horizon_broker.observability.metrics import MetricsRegistry
@@ -114,12 +115,14 @@ class BrokerEngine:
             assign=self._assign,
             recover=self._recover,
             metrics=self.metrics,
+            on_finished=self._on_job_finished,
         )
         self.manager = NodeConnectionManager(
             self.registry,
             self.supervisor,
             config=config.heartbeat,
         )
+        self.probe = NodeHealthProbe(self.registry, config=config.heartbeat)
         self.dispatcher = Dispatcher(self.registry, self.router, self.supervisor)
         self.recovery = RecoveryCoordinator(
             store=self.store,
@@ -136,6 +139,7 @@ class BrokerEngine:
         )
 
         self._jobs: dict[str, InferenceJob] = {}
+        self._waiters: dict[str, asyncio.Future[str | None]] = {}
         self._tasks: list[asyncio.Task[None]] = []
         self._ollama_clients: dict[str, OllamaClient] = {}
         self._running = False
@@ -155,6 +159,7 @@ class BrokerEngine:
             asyncio.create_task(self._flex_loop(), name="horizon-flex"),
             asyncio.create_task(self.manager.run(), name="horizon-connections"),
             asyncio.create_task(self.watchdog.run(), name="horizon-watchdog"),
+            asyncio.create_task(self.probe.run(), name="horizon-probe"),
         ]
         LOGGER.info(
             "horizon broker started: %d static nodes, window=%.0fs",
@@ -178,6 +183,7 @@ class BrokerEngine:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
         await self.manager.close()
+        await self.probe.close()
         await self._close_ollama_clients()
         await self.ledger.close()
         LOGGER.info("horizon broker stopped")
@@ -249,6 +255,36 @@ class BrokerEngine:
             self.queue.remove(job_id)
             job.state = JobState.CANCELLED
         return True
+
+    async def wait_for_result(self, job_id: str, timeout: float | None = None) -> str | None:
+        """Wait for a job to finish and return its text.
+
+        Returns ``None`` when the job failed or the timeout elapsed. The
+        OpenAI-compatible ingress uses this to answer a synchronous client.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return None
+        if job.state in TERMINAL_STATES:
+            return job.result_text
+        future = self._waiters.get(job_id)
+        if future is None:
+            future = asyncio.get_running_loop().create_future()
+            self._waiters[job_id] = future
+        try:
+            if timeout is None:
+                return await future
+            return await asyncio.wait_for(future, timeout)
+        except TimeoutError:
+            return None
+        finally:
+            self._waiters.pop(job_id, None)
+
+    def _on_job_finished(self, job: InferenceJob) -> None:
+        """Resolve a waiter when a job reaches a terminal state."""
+        future = self._waiters.get(job.job_id)
+        if future is not None and not future.done():
+            future.set_result(job.result_text)
 
     def status(self, job_id: str) -> dict[str, Any] | None:
         """Return the JSON view of a job."""

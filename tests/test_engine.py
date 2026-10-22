@@ -24,22 +24,36 @@ async def start_fake_ollama(
 ) -> tuple[TestServer, str]:
     """Start a fake Ollama server that streams ``tokens``."""
 
-    async def handler(request: web.Request) -> web.StreamResponse:
+    async def stream(request: web.Request, chat: bool) -> web.StreamResponse:
         response = web.StreamResponse()
         response.content_type = "application/x-ndjson"
         await response.prepare(request)
         if delay:
             await asyncio.sleep(delay)
         for token in tokens:
-            body = json.dumps({"response": token, "done": False}) + "\n"
-            await response.write(body.encode("utf-8"))
-        final = json.dumps({"response": "", "done": True, "eval_count": len(tokens)}) + "\n"
-        await response.write(final.encode("utf-8"))
+            if chat:
+                body = json.dumps(
+                    {"message": {"role": "assistant", "content": token}, "done": False}
+                )
+            else:
+                body = json.dumps({"response": token, "done": False})
+            await response.write((body + "\n").encode("utf-8"))
+        final = json.dumps(
+            {"response": "", "done": True, "eval_count": len(tokens), "prompt_eval_count": 8}
+        )
+        await response.write((final + "\n").encode("utf-8"))
         await response.write_eof()
         return response
 
+    async def generate(request: web.Request) -> web.StreamResponse:
+        return await stream(request, chat=False)
+
+    async def chat(request: web.Request) -> web.StreamResponse:
+        return await stream(request, chat=True)
+
     app = web.Application()
-    app.router.add_post("/api/generate", handler)
+    app.router.add_post("/api/generate", generate)
+    app.router.add_post("/api/chat", chat)
     server = TestServer(app)
     await server.start_server()
     return server, str(server.make_url("")).rstrip("/")
