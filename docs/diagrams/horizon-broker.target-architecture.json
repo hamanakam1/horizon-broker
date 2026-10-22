@@ -1,0 +1,311 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "The Horizon Broker \u2014 target architecture at v1.0",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "agents",
+      "type": "external",
+      "label": "Agents & SDKs",
+      "sublabel": "any OpenAI client",
+      "pos": [
+        20,
+        300
+      ],
+      "size": [
+        100,
+        60
+      ]
+    },
+    {
+      "id": "ingress",
+      "type": "backend",
+      "label": "Ingress API",
+      "sublabel": "ingress/app.py",
+      "tag": "as built",
+      "pos": [
+        215,
+        300
+      ],
+      "size": [
+        105,
+        60
+      ]
+    },
+    {
+      "id": "scheduler",
+      "type": "backend",
+      "label": "Sleep-Time Scheduler",
+      "sublabel": "scheduler/",
+      "tag": "as built",
+      "pos": [
+        415,
+        300
+      ],
+      "size": [
+        125,
+        60
+      ]
+    },
+    {
+      "id": "router",
+      "type": "backend",
+      "label": "PD-DAG Router",
+      "sublabel": "routing/",
+      "tag": "as built",
+      "pos": [
+        635,
+        300
+      ],
+      "size": [
+        100,
+        60
+      ]
+    },
+    {
+      "id": "supervisor",
+      "type": "backend",
+      "label": "Job Supervisor",
+      "sublabel": "nodes/executor.py",
+      "tag": "as built",
+      "pos": [
+        830,
+        300
+      ],
+      "size": [
+        125,
+        60
+      ]
+    },
+    {
+      "id": "fleet",
+      "type": "cloud",
+      "label": "Edge Fleet",
+      "sublabel": "result streams back",
+      "pos": [
+        1045,
+        300
+      ],
+      "size": [
+        105,
+        60
+      ]
+    },
+    {
+      "id": "control",
+      "type": "cloud",
+      "label": "Control Plane",
+      "sublabel": "leader election + shared queue",
+      "tag": "proposed v1.0",
+      "pos": [
+        392,
+        110
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Snapshot Store",
+      "sublabel": "journal first, ledger second",
+      "pos": [
+        400,
+        490
+      ],
+      "size": [
+        190,
+        60
+      ]
+    },
+    {
+      "id": "recovery",
+      "type": "backend",
+      "label": "Recovery",
+      "sublabel": "recovery/recovery.py",
+      "tag": "as built",
+      "pos": [
+        1000,
+        490
+      ],
+      "size": [
+        190,
+        60
+      ]
+    },
+    {
+      "id": "watchdog",
+      "type": "security",
+      "label": "Watchdog",
+      "sublabel": "nodes/watchdog.py",
+      "tag": "as built",
+      "pos": [
+        1000,
+        650
+      ],
+      "size": [
+        190,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Broker process",
+      "wraps": [
+        "ingress",
+        "scheduler",
+        "router",
+        "supervisor",
+        "watchdog",
+        "recovery",
+        "store"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c-agents-ingress",
+      "from": "agents",
+      "to": "ingress",
+      "label": "chat completions",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c-ingress-scheduler",
+      "from": "ingress",
+      "to": "scheduler",
+      "label": "categorise tier"
+    },
+    {
+      "id": "c-scheduler-router",
+      "from": "scheduler",
+      "to": "router",
+      "label": "dispatch batch"
+    },
+    {
+      "id": "c-router-supervisor",
+      "from": "router",
+      "to": "supervisor",
+      "label": "routing decision",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          685,
+          200
+        ],
+        [
+          892.5,
+          200
+        ]
+      ]
+    },
+    {
+      "id": "c-supervisor-fleet",
+      "from": "supervisor",
+      "to": "fleet",
+      "label": "assign job"
+    },
+    {
+      "id": "c-control-scheduler",
+      "from": "control",
+      "to": "scheduler",
+      "label": "lease + shared queue",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 34
+    },
+    {
+      "id": "c-supervisor-recovery",
+      "from": "supervisor",
+      "to": "recovery",
+      "label": "recover job",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          892.5,
+          450
+        ],
+        [
+          1095,
+          450
+        ],
+        [
+          1095,
+          490
+        ]
+      ]
+    },
+    {
+      "id": "c-supervisor-store",
+      "from": "supervisor",
+      "to": "store",
+      "label": "write checkpoint",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "top",
+      "via": [
+        [
+          760,
+          330
+        ],
+        [
+          760,
+          430
+        ],
+        [
+          495,
+          430
+        ],
+        [
+          495,
+          490
+        ]
+      ]
+    },
+    {
+      "id": "c-recovery-store",
+      "from": "recovery",
+      "to": "store",
+      "label": "read newest snapshot",
+      "variant": "dashed"
+    },
+    {
+      "id": "c-watchdog-recovery",
+      "from": "watchdog",
+      "to": "recovery",
+      "label": "node LOST",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "As built today",
+      "items": [
+        "Ingress, scheduler, router, supervisor, watchdog and recovery are implemented and tested",
+        "The local journal and the EdgeRecord HTTP port already form two durability layers"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Proposed for v1.0",
+      "items": [
+        "A control plane elects one leader so two brokers cannot double-dispatch",
+        "The shared queue survives a broker restart instead of living in memory"
+      ]
+    }
+  ]
+}

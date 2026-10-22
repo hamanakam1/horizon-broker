@@ -51,6 +51,13 @@ throughput matters more than latency.
 
 ![horizon-broker job submit and job list, showing a flex job waiting in the window](docs/screenshots/queue.png)
 
+![The AI City — the factory this fleet serves](docs/images/ai-city-campus.png)
+
+*The AI City: a live 3D view of the factory whose long-horizon work this
+broker schedules. The districts are the destinations; the broker is the
+inference fleet underneath them. The same view in ASCII lives in
+[`docs/images/ai-city.ascii`](docs/images/ai-city.ascii).*
+
 ## Why
 
 95 % of planned agent workloads are *long-horizon*: a recursive codebase scan,
@@ -194,6 +201,72 @@ horizon-broker-cli health
 The CLI talks to a running broker over its HTTP API, so it can be run from
 another machine (`--base-url`).
 
+### In pictures
+
+| The fleet | A job end to end |
+| --- | --- |
+| ![The fleet as the CLI sees it](docs/images/terminal-fleet.png) | ![Submitting a job](docs/images/terminal-job.png) |
+
+![The OpenAI-compatible ingress](docs/images/terminal-openai.png)
+
+![Prometheus metrics](docs/images/terminal-metrics.png)
+
+<details>
+<summary><strong>The AI City in ASCII</strong> — 300 columns, 44 rows</summary>
+
+Every district of the factory that this fleet serves, rendered from the live
+3D render: the pale slabs are the district plates, `o` are building walls,
+`#` are roofs, `*` are landscape and `@` are the accented platforms. The
+full-resolution file is [`docs/images/ai-city.ascii`](docs/images/ai-city.ascii).
+
+```text
+         @             @             @            @@             =           ooooo@                                                oo                                       =@@@##====                                                                                                    # ## ## ###### #  
+         @             @             @            @@             ==== =   ooooo                                                   ooo                                    @@####GOOGLE GEMINI API                                                                                                            
+         @             @             @            @@             ==== ooooDocumentation orchard====                               oo=@                                 @@@@###o#######@@@@                                                                                                                  
+         @             @             @            @@             = oooooo           ooo*****@**@@@o                            @@oo   @@@=@                               @@@#####@@@@@@@                                                                                                                   
+ ### =   @             @            @@            @@            ooooo           ooooo*@***********o**@@                     @@@             ====Command spire=         @@@@@    @@@@@@                                                                                                                      
+         @             @         @   @            @@ ==  =  oooooo             ooooo***************oo@@                  @@               =====@ *==##@@##         @@@@@@@                                                                                                                                  
+         @             @      @      @            @@===  oooooo                **ooooooooo**o##oooooooo              @@@             ##@============@@@@@@=@=    @@@@@@                                 ANTHROPIC CLAUDE=====                                                                               
+         @             @  @         @@            @@  ooooo                             oooo*ooo      ooooooo     @@@              ===#@=o#@=========@@@@@=@@@=@==@                                               ###ooo=                                                                                   
+         @            @@         @   @            oooooo                                                   oooooo=@            @@==o#oo@=*@@=o##==@@========###@=  @=@@=                                       @@###*##ooo@###                                                                              
+         @         @@  @     @@      @  =  =   ooooo######                                                 @@@@@  =****     @==#@@=#@@=@====@@@@==#@==##@===###=======* *===@@                                @@@@@####@o####@@@@                                                                           
+         @      @@     @   @         @@@=   ooooooKnowledge cultivation fields                         ##@=     @**     =*@=========@@=#@===@o#===@#@==#@==@===@========##==@ *@===                            ****@@@##@@@@@@@                                                                             
+         @   @@        @             @= oooooo            ooo****@*o**@@##                           @@@    @=@@  Mission exchange======@@=##@===@@@@==#===@@=#@==========@@        ===@=Council gardens     ######  ****@@                                                                                 
+         @@         @  @             oooooo           oooooooooo@*oo@@@o###@@                    @@@@    @===========######    ==*=o===========##=@@#@===#@#@==o===@===@@@@       oooooo *=@  @====#==@  o######=@        @                        CHATGPT / OPENAI                                         
+         @      @@     @  =       ooooo@             ooooo****oooooo@@@@ooo*@@                @@@    #@===============*###@oo       ==*===*=========@@=o==@@====@===@@@        oooooooooooooo#####@@@  ######                                             ####=#####                                        
+         @  @ @        @@@@@  oooooo     #BYTE & REPAIRooooooooo@@@@ooooooo**              @@@    @==o#@@@=####ooooooooo@@ooooooo         ==*o*o*=======@===@@==@@@@        o===oo#oooooooooo**o#@@####=@@@                                             @##@#####@                                          
+         @@            @=  oooooo       @####o@@@@@@@@      oooooooooooo   #######     @@@@   @o##========###@@#####==========@=======         ==*==o*======@@@@@       @===#o###==#@==oooooooooooooo###o  *@@=@@                                    @@@##########@@@@@                                     
+         @              oooooo        oooo*@@###@@@@ oo                         o######@   @====#===###==##====@#@@====##================##o         ==*=o@@*@**     o===o###==*@@======#o###oooo##oooooooooooo  @@@@@       @                      **@@@@@@@@@o###@@@@@                                    
+         @           ooooo           ooooooooo****oooooooo                       @@@   =@@oo=*=oo=======##@=====@=###==##=o#==###ooooooooooo@@                  =**@ooo===oo##====##@*==@==@====*o@@ooooooooooooo#oo@@@===@@  @   Compute district    ##****@@@@@@@@                                        
+         @@@@@=  oooooo                   oooooooooo@   ooooooo              @@@Integration harbor====###==o#@=#o#===o=o@==##==@==o#@=ooo@@@@      @@            PRODUCTION CAMPUSoo#@=@=##===o##======ooooooooooooo@       ==@@@      ########=  #######    ****                                           
+         @@=  oooooo         Records preservation reserve     ooooooo     @@@  @@@@*@===@@ ====@oo==========o@=o@==o==@=@==o@==o@====@@@@       ===========      ################# ======###==##=====o##@==@=oooo@@        @===@@ ===##@###    #######                                                      
+           ooooo                ooooooooo**@##                     ooooo@@ @===========    o##=#=###@@@oooooo=====o@=@==@=@@=@====@@@@      @===================@           @@@@=@ooooo=======##@==###==@===@o@@       @###==========***##@@=#####                                                          
+         oooo               oooooooooooooooooo**@@                 @@@ooo@@@=@============#oo=#  @=@@@@=*=@=*oooo======@@=@==@@@@@@   @@@@==============#####=========@           ****==ooooo======##@===o@@@        @@=@o@=@====#@==**@*@@####@*@@                                                         
+                           oooooooooooooooooooo**@*             @@@==@=@=oo==@@@=@=@======ooo@@####   @@===@=***=o==oooo==@@@@@@@@=  @=============o@@@oo########=##======@=           =**@=**@ooo===@@@@        @##=@#@===#@@=o@*@=====*@===@#=#@ @==@=                                                    
+                           **oooooooooooooooooo####          @@@ =o@o==@@o@======@o=@=@==========o###===    ====@===**o=@@@@@@@@@###============ooo@@@=@@=@@=o###########=========           =*@@@@@@*=@@    @@@@@=@@==@@==@*@=*#@==@@==##==@=@=@======  @*@@@                          Source package depot
+                                  ooooooooooo     ##########@==========@=@@@=o@@@@@@=@@===o#@=================    @@=@=@@@@@@ @@=####@============@@=====##==o@@===#############=======@       =*=*@    **@@@====Knowledge archive==@ooo@=@=@@===========##== *==@@@ #@                  ##o########        
+                                                      @@@@o*  =*o*=========@=o@==@@==@@@@@@@@@==@o==============#=@@   @@@ @###====@@==#oo@@====================##=#=====#######@@==========@@@@@@@@@@@@@@@@@@@@@@@======@==#=*@==@=@=@=@=@=#@=@=@==========@@      *@==@@        #####oooo###########      
+                          ##SpaceY - SOFTWARE LAUNCH DOCK         =*==o*=========o===@@@@=@@=@=@=o@oo@===========@@@    @===o#@@===##===o@@==o##@======================#o===@@@@@==============#@@@@@    @@@@*@@@@*@@@=========o==@=@@@o@=@=@@@@===@=@===@@@        @#############oooooooooo@ooo#####@@@@   
+                          @o#### =####@@#@@@#@   @@ **                  =*=oo=========@@@==@===@=@==@@@@@=@=@=@@@@    *@=========#####===##===Venture quarter=============@@@@@================@@@@@     @@@@@@@    =@@@==@@========@=@#=@@=@===@====@@@@           =@@           oooooooo#oooooooo@o****   
+                        ##@o@@@#@##@##########@     @CAMPUS TRANSIT - AMBIENT=*=*oo=======@=@=oo==@o=@===@@@@@        @@===========@@==oo###==###==oo@@=##*o@@===========@@=================@@@@@      ##ooooooo@   ##########= *========@@=@o====@@@@          @@@                 oooooooooooooooo***     
+                    #######o@@######                    =#######=####              ===*o*==========@@=@@@@@              @@=o=======o  #######o @@==#==*o@@==@==####=====================@@@@@      @@###@oooooooooo#####       =*=*oo*=====@==@@@           @@@                                            
+                     ############=########                     =@@=@@                    ==*=oo====@@@##              ###oooooooooo==#####=====@@==#@@=###===oo=@=@@===#oo============@@@@@      ###==@o#@@oooooooooooo@o#####       ===*oo@@=**          @@@                                               
+                           #########====########                     =@@@=*             =     ====@@  #             @=o##@ooooooooooo***@@@===@=====@==o@@=#@@==@====o##==@=#@====@@@@@      ##@==o@@==#=====o=o#oooooooooo####ooo              ==**@ @@@@                                                  
+                                 ########=====########                     ==@=@*   ooo@@@@                     ##===ooo===@@@=ooooooooooooooo=oo==========o@@=##**@==o====@@@=@@@@@@@    @#==@@=@@====@=====o@===@@##@oooooooooooooooo#        @  @@@                                                      
+                                      o########=######                           @@===    o=ooooo            @o==o@==o=@==#==###@==##oo#oooooooooooo======ooooo @===#===@===@@@@@@@   @@@===@===#@=o#@=oo=====o@==#===@@==ooooooooooooooooo@   @@@@                                                         
+                                            #######                                    @@@*@    ooooooo    =ooooooo===@==##@=###@====###@=##ooooooooooooo#=====  ==*=@==@@@@@@@@@@  @@Treasury towers@====###===oo=@==o@===@==#@=o#oooooo@  @@@@ Compute utility grounds                                    
+                                                          AGENT QUARTER - 280-COMMAND PEOPLE LAB=@   ooooooo===*oooooooooo===*@@=#@@==oo@==@===o#ooooooooooo@===@*o***@@@@    @@@@@@@@@@@*=*oooooooo===o@@=#==o#@=@=#==@==o@@=o@==@==o@  #####                                                              
+                                                                                                  @@=@*   LOCAL FACTORY CAMPUSo===@==#@@==@==o@==o@=@oooo@@         ==@   @oooooooo   *  *########* ooooo===@==oo===#==o@==@==@@==o@  @=@    o######       ############@                                    
+                                                                                                        @@@@=    ooooooo=@*=ooooooooo===oo==@==o@=@=o@@@               @=ooooooooooooooo#####@@@=@==**=o*ooooooo====#@=#@==@==@@  @@@@             #####ooooo@@@oo@*@@oo                                    
+                                                                                                          ###@@@#######ooo##oo==*ooooooooo===@===o@@               @@====oo###oooooooooo*@o@@o    =@@@@@==**=oooooooo===@==o@  @@@                 ooooo@o@@@@@o@@@@@ooo*@@@                                
+                                                                                                         ###################ooooooo==*=*ooooooo@@               @@=###oo###=====o##ooooooooooooooooo    =@@@=@===*o=ooooo@  @@@                   *ooooo@oo@o#@oo@#oooooo****                               
+                                                                                                                         @@=@*@   oo=oooo#==@@               @o===*oo##@=========@@=o###oooooWorkflow sorting & recycling yard                     **oooooooooooo=@@oooo**                                  
+                                                                                                                               @@@@*    oooooo             ==oooooooo=@====o#@@=##====@=o##@=oooooooooooooooo##o  @@@=@@                                   oooooooooo                                       
+                                                                                                                                    @@@=@*    oooooo          =*=ooooooooo==@==o#@@=###======o#@=###ooooooooooooo@##@                                                                                       
+                                                                                                                                          @@@*=****ooooooo         ==*=ooooooooo====o@@=#=@======#@#=o##oooooo@@@@                                                                                          
+```
+
+</details>
 ## Configuration
 
 Defaults live in `horizon_broker/config.py`; `config/broker.example.yaml`
@@ -211,9 +284,35 @@ EDGERECORD_TOKEN=...        # the ledger token, read per request
 
 ## Documents
 
+* [`docs/ROADMAP.md`](docs/ROADMAP.md) — the long-term plan: what the software
+  becomes, in which order, and what each phase must prove
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — directory tree, subsystem map, fault timeline
 * [`docs/CONTRACTS.md`](docs/CONTRACTS.md) — the data contracts and their JSON Schema
 * [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operating the broker when hardware dies
+
+### The plan in pictures
+
+**Target architecture at v1.0** — what is built today (solid) and what the
+scale phase adds (dashed):
+
+![Target architecture](docs/images/diagram-target-architecture.png)
+
+**How the software gets built** — phase, gate, edge trial, release:
+
+![Delivery workflow](docs/images/diagram-delivery-workflow.png)
+
+**The job state machine**, including the recovery loop and the terminal exits:
+
+![Job lifecycle](docs/images/diagram-job-lifecycle.png)
+
+**One job across a node loss**, from acceptance to completion:
+
+![Node loss sequence](docs/images/diagram-node-loss-sequence.png)
+
+Each diagram is generated from a typed specification in `docs/diagrams/`,
+validated to the showcase standard and published to the local dashboard
+(`http://127.0.0.1:7878/#archify`); the delivery receipt is
+[`docs/diagrams/delivery-receipt.json`](docs/diagrams/delivery-receipt.json).
 
 ## Development
 
@@ -228,7 +327,7 @@ make schemas     # regenerate schemas/*.v1.json
 ## Status
 
 **v0.2.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests (85 of them). The
+recovery paths are implemented and covered by tests (131 of them). The
 prefill/decode split runs end to end for engines that can export a KV cache
 (enable them in `routing.kv_handoff_models`); Ollama cannot, so the broker
 degrades a split to a whole-job run and says so in the log and the
@@ -237,6 +336,12 @@ degrades a split to a whole-job run and says so in the log and the
 Not done yet: a real EdgeRecord ledger adapter (the HTTP port is exercised
 through a fake in the test suite) and multi-broker coordination (one broker
 owns one fleet).
+
+The long-term plan — what the software becomes, in which order, and what each
+phase has to prove before it is allowed to ship — is in
+[`docs/ROADMAP.md`](docs/ROADMAP.md). The first phase is not a feature: it
+closes the defects that make the broker's behaviour and its documentation
+disagree.
 
 ## License
 

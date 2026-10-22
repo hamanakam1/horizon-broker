@@ -1,0 +1,43 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "How the Horizon Broker gets built",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "build", "label": "Build" },
+    { "id": "gate", "label": "Release gates" },
+    { "id": "outcome", "label": "Outcome" }
+  ],
+  "phases": [
+    { "id": "stabilise", "label": "Stabilise", "fromCol": 0, "toCol": 1, "variant": "emphasis" },
+    { "id": "scale", "label": "Scale", "fromCol": 2, "toCol": 4 },
+    { "id": "support", "label": "Support", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["p0", "ga", "p1", "gb", "p2", "trial", "rel"],
+  "nodes": [
+    { "id": "p0", "lane": "build", "col": 0, "type": "backend", "width": 130, "label": "Phase 0 · Truth", "sublabel": "defect sweep", "tag": "v0.3" },
+    { "id": "ga", "lane": "gate", "col": 1, "type": "security", "width": 120, "label": "Gate A", "sublabel": "fault paths green", "tag": "blocking" },
+    { "id": "p1", "lane": "build", "col": 2, "type": "backend", "width": 130, "label": "Phase 1 · Speed", "sublabel": "batching, streaming", "tag": "v0.4" },
+    { "id": "gb", "lane": "gate", "col": 3, "type": "security", "width": 120, "label": "Gate B", "sublabel": "soak plus SLOs", "tag": "blocking" },
+    { "id": "p2", "lane": "build", "col": 4, "type": "backend", "width": 130, "label": "Phase 2 · Scale", "sublabel": "control plane", "tag": "v0.5" },
+    { "id": "trial", "lane": "outcome", "col": 4, "type": "cloud", "width": 120, "label": "Edge Trial", "sublabel": "seven days live", "tag": "proof" },
+    { "id": "rel", "lane": "outcome", "col": 5, "type": "security", "width": 120, "label": "v1.0", "sublabel": "signed, supported", "tag": "GA" },
+    { "id": "stop", "lane": "outcome", "col": 1, "type": "security", "width": 120, "label": "Stop", "sublabel": "does not ship" }
+  ],
+  "edges": [
+    { "id": "e-p0-ga", "from": "p0", "to": "ga", "label": "defects closed" },
+    { "id": "e-ga-p1", "from": "ga", "to": "p1", "label": "green", "variant": "emphasis" },
+    { "id": "e-p1-gb", "from": "p1", "to": "gb", "label": "evidence attached" },
+    { "id": "e-gb-p2", "from": "gb", "to": "p2", "label": "soak passed", "variant": "emphasis" },
+    { "id": "e-p2-trial", "from": "p2", "to": "trial", "label": "deploy to the fleet" },
+    { "id": "e-trial-rel", "from": "trial", "to": "rel", "label": "SLOs held", "variant": "emphasis" },
+    { "id": "e-ga-stop", "from": "ga", "to": "stop", "label": "red", "variant": "security", "role": "error" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Order of work", "items": ["Correctness first: the fleet cannot be trusted until the fault paths are honest", "Scale last: one broker owns one fleet until the control plane exists"] },
+    { "dot": "amber", "title": "Gates are blocking", "items": ["Gate A demands a green fault-path suite, not a green unit suite", "A failed gate stops the phase instead of shipping a regression"] },
+    { "dot": "cyan", "title": "Proof before support", "items": ["The edge trial runs on the real fleet for seven days", "Every phase ships with a runbook and a rollback"] }
+  ]
+}

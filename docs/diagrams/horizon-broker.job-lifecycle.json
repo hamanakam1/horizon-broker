@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "InferenceJob state machine",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      660
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "Job states"
+    },
+    {
+      "id": "faults",
+      "label": "Fault handling and terminal exits"
+    }
+  ],
+  "states": [
+    {
+      "id": "queued",
+      "type": "start",
+      "label": "Queued",
+      "sublabel": "ingress",
+      "lane": "main",
+      "col": 0,
+      "tag": "entry"
+    },
+    {
+      "id": "windowing",
+      "type": "active",
+      "label": "Windowing",
+      "sublabel": "flex batch",
+      "lane": "main",
+      "col": 1,
+      "tag": "sleep-time"
+    },
+    {
+      "id": "dispatched",
+      "type": "active",
+      "label": "Dispatched",
+      "sublabel": "node chosen",
+      "lane": "main",
+      "col": 2
+    },
+    {
+      "id": "running",
+      "type": "active",
+      "label": "Running",
+      "sublabel": "generating",
+      "lane": "main",
+      "col": 3,
+      "tag": "work"
+    },
+    {
+      "id": "completed",
+      "type": "success",
+      "label": "Completed",
+      "sublabel": "result set",
+      "lane": "main",
+      "col": 4,
+      "tag": "done"
+    },
+    {
+      "id": "recovering",
+      "type": "failure",
+      "label": "Recovering",
+      "sublabel": "snapshot",
+      "lane": "faults",
+      "col": 1,
+      "tag": "retryable"
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "Failed",
+      "sublabel": "budget spent",
+      "lane": "faults",
+      "col": 2,
+      "tag": "terminal"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-queued-windowing",
+      "from": "queued",
+      "to": "windowing",
+      "label": "tier is flex",
+      "labelDy": 55
+    },
+    {
+      "id": "t-windowing-dispatched",
+      "from": "windowing",
+      "to": "dispatched",
+      "label": "batch ready",
+      "labelDy": 55
+    },
+    {
+      "id": "t-dispatched-running",
+      "from": "dispatched",
+      "to": "running",
+      "label": "node accepts",
+      "labelDy": 55,
+      "labelDx": 34
+    },
+    {
+      "id": "t-running-completed",
+      "from": "running",
+      "to": "completed",
+      "label": "generation done",
+      "labelDy": 55
+    },
+    {
+      "id": "t-running-recovering",
+      "from": "running",
+      "to": "recovering",
+      "label": "node LOST",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 40
+    },
+    {
+      "id": "t-recovering-running",
+      "from": "recovering",
+      "to": "running",
+      "label": "resume from snapshot",
+      "variant": "emphasis",
+      "fromSide": "left",
+      "toSide": "top",
+      "via": [
+        [
+          470,
+          307
+        ],
+        [
+          470,
+          110
+        ],
+        [
+          556,
+          110
+        ]
+      ],
+      "labelSegment": 2
+    },
+    {
+      "id": "t-recovering-failed",
+      "from": "recovering",
+      "to": "failed",
+      "label": "attempts exhausted",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          556,
+          380
+        ],
+        [
+          710,
+          380
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Main path",
+      "items": [
+        "One horizontal rail carries the ordered job states",
+        "Flex work waits in a window before it is dispatched"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Fault handling",
+      "items": [
+        "A node loss moves the job into Recovering",
+        "Recovery returns the job to Running with a resume point"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Terminal exits",
+      "items": [
+        "Failed never points back into active execution",
+        "The retry budget is finite and ends in Failed"
+      ]
+    }
+  ]
+}

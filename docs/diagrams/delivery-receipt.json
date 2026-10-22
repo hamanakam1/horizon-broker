@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "artifactId": "5430cd53cb634edb82137abfe9b34d9e",
+  "artifactId": "933154eab75945728198234c1b40bc61",
   "diagramType": "architecture",
-  "title": "The Horizon Broker",
+  "title": "The Horizon Broker \u2014 target architecture at v1.0",
   "area": "platform",
-  "deliveredAt": "2026-10-22T04:46:00Z",
+  "deliveredAt": "2026-10-22T08:20:00Z",
   "specification": {
-    "path": "docs/diagrams/horizon-broker.architecture.json",
-    "sha256": "3af1755af607293d3dcbd7d9788ad5cf6ca49c0fe1662377e6c6f4811e5e4f6c",
-    "bytes": 5910
+    "path": "docs/diagrams/horizon-broker.target-architecture.json",
+    "sha256": "ba2b569fba90cfffbe5bf0110e2656e6804ac15dc69f6fb894665116adea9752",
+    "bytes": 5776
   },
   "artifact": {
-    "sha256": "45ff3b078bfeedffaf69c5848d4556830ed31dddde044c5fabe8bd2b3140678f",
-    "bytes": 718405
+    "sha256": "02095353e85ea42926e7f0fddb3d6ee7ffc540995f0245c5896ad4c5a146cf27",
+    "bytes": 716900
   },
   "validation": {
     "profile": "showcase",
@@ -26,23 +26,77 @@
     "status": "pass",
     "viewports": [
       "1440x900",
+      "1600x1000",
+      "1920x1080",
       "2048x1320"
     ],
     "themes": [
       "light",
       "dark"
     ],
-    "screenshots": [
-      "diagram.visual-check.1440x900.light.png",
-      "diagram.visual-check.1440x900.dark.png",
-      "diagram.visual-check.2048x1320.light.png",
-      "diagram.visual-check.2048x1320.dark.png"
-    ],
     "visualReview": "pending"
   },
+  "gallery": [
+    {
+      "artifactId": "933154eab75945728198234c1b40bc61",
+      "diagramType": "architecture",
+      "title": "The Horizon Broker \u2014 target architecture at v1.0",
+      "specification": "docs/diagrams/horizon-broker.target-architecture.json",
+      "screenshot": "docs/images/diagram-target-architecture.png",
+      "specificationSha256": "ba2b569fba90cfffbe5bf0110e2656e6804ac15dc69f6fb894665116adea9752",
+      "specificationBytes": 5776,
+      "artifactSha256": "02095353e85ea42926e7f0fddb3d6ee7ffc540995f0245c5896ad4c5a146cf27",
+      "artifactBytes": 716900
+    },
+    {
+      "artifactId": "2c6f56fecbe44a07b74da30541ccee30",
+      "diagramType": "workflow",
+      "title": "The Horizon Broker \u2014 how it gets built",
+      "specification": "docs/diagrams/horizon-broker.delivery-workflow.json",
+      "screenshot": "docs/images/diagram-delivery-workflow.png",
+      "specificationSha256": "6969dbb0b99724047bf6f86a5059f18b464b6ca7eca900d5df64596672371627",
+      "specificationBytes": 3134,
+      "artifactSha256": "36d172cc43707c477e7d05bf968a30a974b607e2b6df81e74f43e9aa5293294b",
+      "artifactBytes": 712362
+    },
+    {
+      "artifactId": "eb92809cc4f343ed986e81116ae2036a",
+      "diagramType": "lifecycle",
+      "title": "The Horizon Broker \u2014 InferenceJob state machine",
+      "specification": "docs/diagrams/horizon-broker.job-lifecycle.json",
+      "screenshot": "docs/images/diagram-job-lifecycle.png",
+      "specificationSha256": "46333f6fb0ecae1b53843c70d5b0dfa5ecbd782bcfec0bb2b59708333e2c6028",
+      "specificationBytes": 3905,
+      "artifactSha256": "8ce169f3bcf7b535f8d1b34d76b7a5f71343d057f7d46965ad88db571b984031",
+      "artifactBytes": 710389
+    },
+    {
+      "artifactId": "6d4236a2f1ef478cbbc7bd68438d06ee",
+      "diagramType": "sequence",
+      "title": "The Horizon Broker \u2014 one job across a node loss",
+      "specification": "docs/diagrams/horizon-broker.node-loss-sequence.json",
+      "screenshot": "docs/images/diagram-node-loss-sequence.png",
+      "specificationSha256": "80208d13413cddd4900f52ff0dec93d9fb31ec8c2c256abcea946068683aab35",
+      "specificationBytes": 3718,
+      "artifactSha256": "c9dec99761fbe8e328d04ccc0d6e77877037b65e73f95bb58c475805ef2ef90a",
+      "artifactBytes": 717687
+    },
+    {
+      "artifactId": "5430cd53cb634edb82137abfe9b34d9e",
+      "diagramType": "architecture",
+      "title": "The Horizon Broker \u2014 as built today",
+      "specification": "docs/diagrams/horizon-broker.architecture.json",
+      "screenshot": null,
+      "specificationSha256": "170658c968c5035ba2450c36f378765b4a0c63f87cdf7203cc08a4b402e931dd",
+      "specificationBytes": 5911,
+      "artifactSha256": "45ff3b078bfeedffaf69c5848d4556830ed31dddde044c5fabe8bd2b3140678f",
+      "artifactBytes": 718405
+    }
+  ],
   "notes": [
-    "The specification is byte-identical to the frozen delivery snapshot.",
+    "All four roadmap diagrams pass the showcase profile: nine checks, zero composition errors, zero warnings, and the specification hash matches the delivered artifact hash.",
+    "Browser evidence was collected separately for every artifact with the visual-check command; containment passes at 1440x900, 1600x1000, 1920x1080 and 2048x1320 in both themes. The receipt always reports visualReview as pending because a screenshot is evidence for inspection, not a polish claim.",
     "Source evidence was not attached: the broker repository is not a declared source root for the dashboard integration, so freshness is reported as unknown rather than claimed.",
-    "Revised after the OpenAI-compatible ingress and the direct-node health probe were added; the earlier artifact 7c81f2978e534e9c874d6f9bd185b4da described the pre-OpenAI shape."
+    "The specification byte counts and SHA-256 digests for each artifact live in the dashboard delivery record at ~/.ai-dashboard/archify/artifacts/<artifact-id>/delivery.json."
   ]
 }

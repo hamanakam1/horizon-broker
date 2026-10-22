@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "One job across a node loss",
+    "viewBox": [1060, 545],
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    { "id": "client", "type": "external", "label": "Agent", "sublabel": "OpenAI client" },
+    { "id": "ingress", "type": "backend", "label": "Ingress API", "sublabel": "ingress/app.py" },
+    { "id": "queue", "type": "messagebus", "label": "Job Queue", "sublabel": "scheduler/" },
+    { "id": "router", "type": "backend", "label": "PD-DAG Router", "sublabel": "routing/" },
+    { "id": "executor", "type": "backend", "label": "Job Supervisor", "sublabel": "nodes/executor.py" },
+    { "id": "engine", "type": "cloud", "label": "Inference Node", "sublabel": "Ollama or agent" },
+    { "id": "watchdog", "type": "security", "label": "Watchdog", "sublabel": "nodes/watchdog.py" },
+    { "id": "store", "type": "database", "label": "Snapshot Store", "sublabel": "journal and ledger" }
+  ],
+  "segments": [
+    { "from": 150, "to": 250, "label": "Accept and route" },
+    { "from": 250, "to": 350, "label": "Execute and checkpoint" },
+    { "from": 350, "to": 480, "label": "Node loss and recovery" }
+  ],
+  "messages": [
+    { "id": "m1", "from": "client", "to": "ingress", "y": 180, "label": "POST /v1/chat/completions", "variant": "emphasis" },
+    { "id": "m2", "from": "ingress", "to": "queue", "y": 208, "label": "submit job", "variant": "emphasis" },
+    { "id": "m3", "from": "ingress", "to": "client", "y": 236, "label": "202 + job_id" },
+    { "id": "m4", "from": "router", "to": "executor", "y": 264, "label": "routing decision", "variant": "emphasis" },
+    { "id": "m5", "from": "executor", "to": "engine", "y": 292, "label": "assign job", "variant": "emphasis" },
+    { "id": "m6", "from": "engine", "to": "executor", "y": 320, "label": "progress and checkpoint" },
+    { "id": "m7", "from": "executor", "to": "store", "y": 348, "label": "write snapshot", "variant": "dashed" },
+    { "id": "m8", "from": "watchdog", "to": "executor", "y": 376, "label": "node LOST after 6s", "variant": "security" },
+    { "id": "m9", "from": "executor", "to": "store", "y": 404, "label": "load newest snapshot", "variant": "dashed" },
+    { "id": "m10", "from": "executor", "to": "engine", "y": 432, "label": "re-assign, resume", "variant": "emphasis" },
+    { "id": "m11", "from": "executor", "to": "ingress", "y": 460, "label": "job completed" }
+  ],
+  "activations": [
+    { "participant": "ingress", "from": 174, "to": 226, "type": "backend" },
+    { "participant": "queue", "from": 202, "to": 250, "type": "messagebus" },
+    { "participant": "router", "from": 258, "to": 286, "type": "backend" },
+    { "participant": "executor", "from": 258, "to": 452, "type": "backend" },
+    { "participant": "engine", "from": 286, "to": 314, "type": "cloud" },
+    { "participant": "engine", "from": 426, "to": 454, "type": "cloud" },
+    { "participant": "watchdog", "from": 366, "to": 386, "type": "security" },
+    { "participant": "store", "from": 340, "to": 398, "type": "database" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "Accepted before it runs", "items": ["The ingress answers 202 with a job id before any engine work starts", "Both ingresses produce the same InferenceJob"] },
+    { "dot": "amber", "title": "Durable by default", "items": ["Every checkpoint is written to the journal first and the ledger second", "The snapshot carries the prompt hash so a mismatch is rejected"] },
+    { "dot": "rose", "title": "Bounded by the budget", "items": ["Silence for longer than the heartbeat timeout declares the node LOST", "The retry budget is finite and ends the job loudly"] }
+  ]
+}
