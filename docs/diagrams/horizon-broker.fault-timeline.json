@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "meta": {
+    "title": "The 30-second recovery budget",
+    "output": "horizon-broker-fault-timeline.html",
+    "quality_profile": "showcase",
+    "evidence": "illustrative",
+    "timezone": "UTC",
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      { "id": "detect", "label": "Detection", "focus": ["death", "silence", "lost"], "note": "How long the broker waits before it believes a node is gone." },
+      { "id": "resume", "label": "Resume", "focus": ["load", "validate", "redispatch", "resume"], "note": "The four steps that put the work back on a healthy node." },
+      { "id": "checkpoint", "label": "Checkpoint cadence", "focus": ["checkpoint"], "note": "What the supervisor was writing while the node died." }
+    ]
+  },
+  "layout": {
+    "breaks": "auto"
+  },
+  "lanes": [
+    { "id": "fault", "label": "The fault" },
+    { "id": "broker", "label": "The broker" },
+    { "id": "state", "label": "Recovery state" }
+  ],
+  "events": [
+    { "id": "death", "at": "2026-01-01T00:00:00Z", "title": "The node dies", "detail": "Thermal kill, power loss or a pulled cable.", "lane": "fault", "kind": "alert", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 190, "end_line": 191, "label": "the documented fault timeline" }] },
+    { "id": "silence", "at": "2026-01-01T00:00:00Z", "title": "The socket closes, or the heartbeat stops", "detail": "Either the socket closes or the heartbeat goes silent; both are the same event to the broker.", "lane": "fault", "kind": "default", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 191, "end_line": 191, "label": "silence is the signal" }] },
+    { "id": "checkpoint", "at": "2026-01-01T00:00:04Z", "title": "The last checkpoint was committed", "detail": "Every 64 tokens or 10 seconds the supervisor writes a FaultRecoverySnapshot.", "lane": "state", "kind": "change", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 204, "end_line": 209, "label": "the checkpoint cadence" }] },
+    { "id": "lost", "at": "2026-01-01T00:00:06Z", "title": "The watchdog declares the node LOST", "detail": "Silence past heartbeat.timeout_seconds. The node is quarantined for quarantine_seconds.", "lane": "broker", "kind": "alert", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 192, "end_line": 193, "label": "the watchdog verdict" }] },
+    { "id": "load", "at": "2026-01-01T00:00:06.1Z", "title": "The newest snapshot is loaded", "detail": "The coordinator reads EdgeRecord, and falls back to the local journal when the ledger is down.", "lane": "broker", "kind": "action", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 195, "end_line": 196, "label": "load the newest snapshot" }] },
+    { "id": "validate", "at": "2026-01-01T00:00:06.2Z", "title": "The snapshot is validated against the job", "detail": "Prompt hash and model must match, or the job restarts clean on the new node.", "lane": "broker", "kind": "action", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 197, "end_line": 198, "label": "validate the snapshot" }] },
+    { "id": "redispatch", "at": "2026-01-01T00:00:06.3Z", "title": "The job is re-dispatched", "detail": "Directly, not through the shared queue, and never onto the node that just failed.", "lane": "broker", "kind": "action", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 199, "end_line": 199, "label": "re-dispatch elsewhere" }] },
+    { "id": "resume", "at": "2026-01-01T00:00:06.5Z", "title": "Generation resumes from the decode step", "detail": "The recorded partial tokens are replayed, so the work already done is not repeated.", "lane": "state", "kind": "recovery", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 200, "end_line": 202, "label": "resume from the decode step" }] }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "These are the designed budgets", "items": ["The times come from the documented fault timeline, not from a recorded incident", "The evidence flag is illustrative on purpose: no trace was captured", "The real detector is heartbeat.timeout_seconds, six seconds by default"] },
+    { "dot": "emerald", "title": "What the timeline protects", "items": ["Detection costs the silence window, which is why the heartbeat interval is two seconds", "The recovery work itself is under half a second in the design", "The thirty-second recovery budget is the outer bound, not the expectation"] },
+    { "dot": "rose", "title": "Where the plan still leaks", "items": ["The quarantine never expires, so a node that failed once never returns to the pool", "A transient socket drop fails the running job instead of waiting for the verdict", "Phase 0 of the roadmap closes both"] }
+  ]
+}

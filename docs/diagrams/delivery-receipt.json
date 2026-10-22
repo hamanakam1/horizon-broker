@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
-  "artifactId": "933154eab75945728198234c1b40bc61",
+  "artifactId": "105c7c5594844abc96541e7ad5385f52",
   "diagramType": "architecture",
   "title": "The Horizon Broker \u2014 target architecture at v1.0",
   "area": "platform",
   "deliveredAt": "2026-10-22T08:20:00Z",
   "specification": {
     "path": "docs/diagrams/horizon-broker.target-architecture.json",
-    "sha256": "ba2b569fba90cfffbe5bf0110e2656e6804ac15dc69f6fb894665116adea9752",
-    "bytes": 5776
+    "sha256": "f5b09a5e9c0285a958547c692b0566538ec5b8a3dbe5a10ab079c0a37177d59b",
+    "bytes": 7679
   },
   "artifact": {
-    "sha256": "02095353e85ea42926e7f0fddb3d6ee7ffc540995f0245c5896ad4c5a146cf27",
-    "bytes": 716900
+    "sha256": "37ae103cad2c1520e7afacb3a06aaac207a9282710ffd3555b6e1b5405148343",
+    "bytes": 842751
   },
   "validation": {
     "profile": "showcase",
@@ -38,65 +38,135 @@
   },
   "gallery": [
     {
-      "artifactId": "933154eab75945728198234c1b40bc61",
+      "artifactId": "105c7c5594844abc96541e7ad5385f52",
       "diagramType": "architecture",
       "title": "The Horizon Broker \u2014 target architecture at v1.0",
       "specification": "docs/diagrams/horizon-broker.target-architecture.json",
+      "specificationSha256": "f5b09a5e9c0285a958547c692b0566538ec5b8a3dbe5a10ab079c0a37177d59b",
+      "specificationBytes": 7679,
       "screenshot": "docs/images/diagram-target-architecture.png",
-      "specificationSha256": "ba2b569fba90cfffbe5bf0110e2656e6804ac15dc69f6fb894665116adea9752",
-      "specificationBytes": 5776,
-      "artifactSha256": "02095353e85ea42926e7f0fddb3d6ee7ffc540995f0245c5896ad4c5a146cf27",
-      "artifactBytes": 716900
+      "artifactSha256": "37ae103cad2c1520e7afacb3a06aaac207a9282710ffd3555b6e1b5405148343",
+      "artifactBytes": 842751
     },
     {
-      "artifactId": "2c6f56fecbe44a07b74da30541ccee30",
+      "artifactId": "a27b46069c2645bfb4d437aff829fd9a",
       "diagramType": "workflow",
-      "title": "The Horizon Broker \u2014 how it gets built",
+      "title": "The Horizon Broker \u2014 delivery workflow",
       "specification": "docs/diagrams/horizon-broker.delivery-workflow.json",
+      "specificationSha256": "099545a4ad80c3a1b62bb935e1529f191957de447b7e7d68736dd8a7957dd999",
+      "specificationBytes": 7761,
       "screenshot": "docs/images/diagram-delivery-workflow.png",
-      "specificationSha256": "6969dbb0b99724047bf6f86a5059f18b464b6ca7eca900d5df64596672371627",
-      "specificationBytes": 3134,
-      "artifactSha256": "36d172cc43707c477e7d05bf968a30a974b607e2b6df81e74f43e9aa5293294b",
-      "artifactBytes": 712362
+      "artifactSha256": "6c545c42710e19a13ceaedfbc786609bfebfb632e794cb3d598d17b1eb8b0d48",
+      "artifactBytes": 825135
     },
     {
-      "artifactId": "eb92809cc4f343ed986e81116ae2036a",
+      "artifactId": "e0587ac0ac874af6afdbc7223da1903d",
       "diagramType": "lifecycle",
-      "title": "The Horizon Broker \u2014 InferenceJob state machine",
+      "title": "The Horizon Broker \u2014 the InferenceJob state machine",
       "specification": "docs/diagrams/horizon-broker.job-lifecycle.json",
+      "specificationSha256": "dab848d79d4c0354351013e808ec7574ac78e01f925599ae74149496b63f8b86",
+      "specificationBytes": 6612,
       "screenshot": "docs/images/diagram-job-lifecycle.png",
-      "specificationSha256": "46333f6fb0ecae1b53843c70d5b0dfa5ecbd782bcfec0bb2b59708333e2c6028",
-      "specificationBytes": 3905,
-      "artifactSha256": "8ce169f3bcf7b535f8d1b34d76b7a5f71343d057f7d46965ad88db571b984031",
-      "artifactBytes": 710389
+      "artifactSha256": "abc7bc4e3f37ee482614a3393669e0c369e1ba2d807ff146344bc0a4b904e658",
+      "artifactBytes": 824249
     },
     {
-      "artifactId": "6d4236a2f1ef478cbbc7bd68438d06ee",
+      "artifactId": "fdc0632586b5471c8882b0db68390212",
       "diagramType": "sequence",
       "title": "The Horizon Broker \u2014 one job across a node loss",
       "specification": "docs/diagrams/horizon-broker.node-loss-sequence.json",
+      "specificationSha256": "d1e22202ff0290307b2d909e6e45c3d42483d77b3842202bbdb32783bc68568d",
+      "specificationBytes": 7957,
       "screenshot": "docs/images/diagram-node-loss-sequence.png",
-      "specificationSha256": "80208d13413cddd4900f52ff0dec93d9fb31ec8c2c256abcea946068683aab35",
-      "specificationBytes": 3718,
-      "artifactSha256": "c9dec99761fbe8e328d04ccc0d6e77877037b65e73f95bb58c475805ef2ef90a",
-      "artifactBytes": 717687
+      "artifactSha256": "1a98a553b5088f5e3fc6e133f65e45807bdea8eb035002818a2b1e17154cdf1d",
+      "artifactBytes": 830336
     },
     {
-      "artifactId": "5430cd53cb634edb82137abfe9b34d9e",
-      "diagramType": "architecture",
-      "title": "The Horizon Broker \u2014 as built today",
-      "specification": "docs/diagrams/horizon-broker.architecture.json",
-      "screenshot": null,
-      "specificationSha256": "170658c968c5035ba2450c36f378765b4a0c63f87cdf7203cc08a4b402e931dd",
-      "specificationBytes": 5911,
-      "artifactSha256": "45ff3b078bfeedffaf69c5848d4556830ed31dddde044c5fabe8bd2b3140678f",
-      "artifactBytes": 718405
+      "artifactId": "95476e56f1be4fa4b970e6d8f1070f27",
+      "diagramType": "dataflow",
+      "title": "The Horizon Broker \u2014 how a checkpoint becomes durable",
+      "specification": "docs/diagrams/horizon-broker.checkpoint-dataflow.json",
+      "specificationSha256": "de09b547b2202978456b3e71cdbd41c7b6d75b6340cfca8b611735bba0153a2f",
+      "specificationBytes": 7844,
+      "screenshot": "docs/images/diagram-checkpoint-dataflow.png",
+      "artifactSha256": "24414186aeaffc3c9a90812f5140dc280041ce22308929de76e221d0becab1f0",
+      "artifactBytes": 826579
+    },
+    {
+      "artifactId": "5d09bd154f6145e7bea2cc70a87fe8c7",
+      "diagramType": "erd",
+      "title": "The Horizon Broker \u2014 the durable state",
+      "specification": "docs/diagrams/horizon-broker.state-erd.json",
+      "specificationSha256": "be4988ae5829bf6f2e24ff213e631eb286c80c63cbb5a224c2bffa6115b8ee33",
+      "specificationBytes": 9642,
+      "screenshot": "docs/images/diagram-state-erd.png",
+      "artifactSha256": "7bbe8bd21d719450ed9135f0c2380d133c17632a40b2a7a684dcd633faa19723",
+      "artifactBytes": 845792
+    },
+    {
+      "artifactId": "7c1c430ce7c54c4f8c205b49e99547d3",
+      "diagramType": "class",
+      "title": "The Horizon Broker \u2014 the contract types",
+      "specification": "docs/diagrams/horizon-broker.contract-classes.json",
+      "specificationSha256": "a614410b84d9a0334aa164b328bcb33e483a9df36c3ce5893b622b479be6e618",
+      "specificationBytes": 15147,
+      "screenshot": "docs/images/diagram-contract-classes.png",
+      "artifactSha256": "c174fa3fd067d0ebdc9c4949f277d1b4e541204128364151f75158f44f34476b",
+      "artifactBytes": 867655
+    },
+    {
+      "artifactId": "c3875856ce564c47956e5a8fa1493484",
+      "diagramType": "tree",
+      "title": "The Horizon Broker \u2014 the package tree",
+      "specification": "docs/diagrams/horizon-broker.package-tree.json",
+      "specificationSha256": "e083e64fdbc192424eb4a5384f75ee6bf72a49ceec68a1b5dfcf502451639660",
+      "specificationBytes": 16196,
+      "screenshot": "docs/images/diagram-package-tree.png",
+      "artifactSha256": "7b1b9668e68b0d912d80d2dc5dec5c2d45ffa8d3c17093f6dccc6bb57fa94492",
+      "artifactBytes": 885677
+    },
+    {
+      "artifactId": "7e4f3b1234ef45a18ead63df30d205e3",
+      "diagramType": "timeline",
+      "title": "The Horizon Broker \u2014 the 30-second recovery budget",
+      "specification": "docs/diagrams/horizon-broker.fault-timeline.json",
+      "specificationSha256": "623b4aabc33a1252d90b06101ddecb72a8af14a74eb955945a9f626d68561ce8",
+      "specificationBytes": 4846,
+      "screenshot": "docs/images/diagram-fault-timeline.png",
+      "artifactSha256": "cdef92ba2847a10be052692a431e49dc67d314a2ab73222f046a3f7818384581",
+      "artifactBytes": 825511
+    },
+    {
+      "artifactId": "794c87e2c6a344f69f660287a4fb1b5e",
+      "diagramType": "waterfall",
+      "title": "The Horizon Broker \u2014 where the recovery time goes",
+      "specification": "docs/diagrams/horizon-broker.recovery-waterfall.json",
+      "specificationSha256": "e71552f255295ded6123b7247facb8840f05d4018080baad17131d722270e212",
+      "specificationBytes": 4934,
+      "screenshot": "docs/images/diagram-recovery-waterfall.png",
+      "artifactSha256": "9cb294fb33d9eaa938208db679f16f88c2c691ee3f6fe75764608f4e8d432248",
+      "artifactBytes": 825720
+    },
+    {
+      "artifactId": "b4a07e552f6b420d8627758853dd8f5d",
+      "diagramType": "explainer",
+      "title": "How should the Horizon Broker be built from here?",
+      "specification": "docs/diagrams/horizon-broker.plan-explainer.md",
+      "specificationSha256": "6a0f23d9da6436eb844afc72603af67636d8933d0a2b72590a8649355a4c29ae",
+      "specificationBytes": 4319,
+      "screenshot": "docs/images/explainer-plan.png",
+      "artifactSha256": "da52d16be4908246cceda5a253830d4c16ee378a680eb6fc98edd4611c7f141c",
+      "artifactBytes": 667050
     }
   ],
   "notes": [
-    "All four roadmap diagrams pass the showcase profile: nine checks, zero composition errors, zero warnings, and the specification hash matches the delivered artifact hash.",
-    "Browser evidence was collected separately for every artifact with the visual-check command; containment passes at 1440x900, 1600x1000, 1920x1080 and 2048x1320 in both themes. The receipt always reports visualReview as pending because a screenshot is evidence for inspection, not a polish claim.",
-    "Source evidence was not attached: the broker repository is not a declared source root for the dashboard integration, so freshness is reported as unknown rather than claimed.",
-    "The specification byte counts and SHA-256 digests for each artifact live in the dashboard delivery record at ~/.ai-dashboard/archify/artifacts/<artifact-id>/delivery.json."
-  ]
+    "Every artifact passes the showcase profile: nine checks, zero composition errors, zero warnings, and the specification hash matches the delivered artifact hash.",
+    "Browser evidence was collected separately for every artifact with the visual-check command at 1440x900, 1600x1000, 1920x1080 and 2048x1320 in both themes. There is no horizontal overflow anywhere; a tall artifact scrolls vertically in the reader, which is the contract for a deep tree and a long explainer.",
+    "The receipt always reports visualReview as pending because a screenshot is evidence for inspection, not a polish claim.",
+    "Source evidence is attached to the nodes and verified against the pinned commit 76e545fd9e6ed8ce58dc74916f245979154941da."
+  ],
+  "renderer": {
+    "version": "3.2.0",
+    "pin": "208acba8d412335185b2056fedf54b3405df43fb"
+  }
 }

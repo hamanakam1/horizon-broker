@@ -1,0 +1,687 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "The Horizon Broker package tree",
+    "output": "horizon-broker-package-tree.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      {
+        "id": "runtime-path",
+        "label": "The request path",
+        "focus": [
+          "pkg",
+          "ingress",
+          "scheduler",
+          "routing",
+          "nodes"
+        ],
+        "note": "Follow one request from the ingress to the node that runs it."
+      },
+      {
+        "id": "durability",
+        "label": "The durability path",
+        "focus": [
+          "pkg",
+          "recovery",
+          "snapshot_store",
+          "ledger_client",
+          "journal"
+        ],
+        "note": "The state that survives a dead node."
+      },
+      {
+        "id": "wire-format",
+        "label": "The wire format",
+        "focus": [
+          "pkg",
+          "contracts",
+          "jobs_contract",
+          "nodes_contract"
+        ],
+        "note": "The contracts every other package depends on."
+      },
+      {
+        "id": "fleet-contact",
+        "label": "Contacting the fleet",
+        "focus": [
+          "pkg",
+          "nodes",
+          "executor",
+          "registry",
+          "watchdog",
+          "probe"
+        ],
+        "note": "Who talks to the hardware and who notices when it stops answering."
+      },
+      {
+        "id": "operator-surface",
+        "label": "The operator surface",
+        "focus": [
+          "pkg",
+          "cli",
+          "main",
+          "config"
+        ],
+        "note": "What the operator runs and what they configure."
+      }
+    ]
+  },
+  "layout": {
+    "direction": "right",
+    "gapX": 26,
+    "gapY": 24,
+    "nodeW": 210,
+    "nodeMaxW": 280
+  },
+  "nodes": [
+    {
+      "id": "pkg",
+      "label": "horizon_broker",
+      "sublabel": "the broker package",
+      "sources": [
+        {
+          "path": "horizon_broker/__init__.py",
+          "line": 1,
+          "end_line": 38,
+          "label": "public package surface"
+        }
+      ]
+    },
+    {
+      "id": "contracts",
+      "label": "contracts/",
+      "parent": "pkg",
+      "sublabel": "the wire format",
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/__init__.py",
+          "line": 1,
+          "end_line": 78,
+          "label": "contract re-exports"
+        }
+      ]
+    },
+    {
+      "id": "jobs_contract",
+      "label": "jobs.py",
+      "parent": "contracts",
+      "sublabel": "InferenceJob, InferencePayload",
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 186,
+          "end_line": 260,
+          "label": "InferenceJob"
+        }
+      ]
+    },
+    {
+      "id": "nodes_contract",
+      "label": "nodes.py",
+      "parent": "contracts",
+      "sublabel": "NodeCapability, NodeHealth",
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/nodes.py",
+          "line": 67,
+          "end_line": 143,
+          "label": "NodeCapability"
+        }
+      ]
+    },
+    {
+      "id": "recovery_contract",
+      "label": "recovery.py",
+      "parent": "contracts",
+      "sublabel": "FaultRecoverySnapshot",
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/recovery.py",
+          "line": 62,
+          "end_line": 106,
+          "label": "FaultRecoverySnapshot"
+        }
+      ]
+    },
+    {
+      "id": "ledger_contract",
+      "label": "ledger.py",
+      "parent": "contracts",
+      "sublabel": "LedgerRecord, receipt",
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/ledger.py",
+          "line": 26,
+          "end_line": 71,
+          "label": "LedgerRecord"
+        }
+      ]
+    },
+    {
+      "id": "errors_contract",
+      "label": "errors.py",
+      "parent": "contracts",
+      "sublabel": "the broker error taxonomy",
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/errors.py",
+          "line": 1,
+          "end_line": 56,
+          "label": "error taxonomy"
+        }
+      ]
+    },
+    {
+      "id": "ingress",
+      "label": "ingress/",
+      "parent": "pkg",
+      "sublabel": "the API edge",
+      "sources": [
+        {
+          "path": "horizon_broker/ingress/app.py",
+          "line": 274,
+          "end_line": 291,
+          "label": "create_app"
+        }
+      ]
+    },
+    {
+      "id": "app",
+      "label": "app.py",
+      "parent": "ingress",
+      "sublabel": "aiohttp routes, tier categorisation",
+      "sources": [
+        {
+          "path": "horizon_broker/ingress/app.py",
+          "line": 47,
+          "end_line": 120,
+          "label": "job_from_payload and the routes"
+        }
+      ]
+    },
+    {
+      "id": "openai",
+      "label": "openai.py",
+      "parent": "ingress",
+      "sublabel": "OpenAI request translation",
+      "sources": [
+        {
+          "path": "horizon_broker/ingress/openai.py",
+          "line": 85,
+          "end_line": 172,
+          "label": "chat_request_to_job"
+        }
+      ]
+    },
+    {
+      "id": "server",
+      "label": "server.py",
+      "parent": "ingress",
+      "sublabel": "runner lifecycle",
+      "sources": [
+        {
+          "path": "horizon_broker/ingress/server.py",
+          "line": 17,
+          "end_line": 62,
+          "label": "BrokerServer"
+        }
+      ]
+    },
+    {
+      "id": "scheduler",
+      "label": "scheduler/",
+      "parent": "pkg",
+      "sublabel": "batching and queues",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/engine.py",
+          "line": 63,
+          "end_line": 140,
+          "label": "BrokerEngine"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "label": "engine.py",
+      "parent": "scheduler",
+      "sublabel": "the runtime that wires it all",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/engine.py",
+          "line": 153,
+          "end_line": 209,
+          "label": "start and drain"
+        }
+      ]
+    },
+    {
+      "id": "priority_queue",
+      "label": "priority_queue.py",
+      "parent": "scheduler",
+      "sublabel": "two lanes, one window",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/priority_queue.py",
+          "line": 59,
+          "end_line": 130,
+          "label": "JobPriorityQueue"
+        }
+      ]
+    },
+    {
+      "id": "window",
+      "label": "window.py",
+      "parent": "scheduler",
+      "sublabel": "the sleep-time window",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/window.py",
+          "line": 97,
+          "end_line": 124,
+          "label": "evaluate_window"
+        }
+      ]
+    },
+    {
+      "id": "batcher",
+      "label": "batcher.py",
+      "parent": "scheduler",
+      "sublabel": "batch planning per node",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/batcher.py",
+          "line": 20,
+          "end_line": 65,
+          "label": "BatchPlanner"
+        }
+      ]
+    },
+    {
+      "id": "dispatch",
+      "label": "dispatch.py",
+      "parent": "scheduler",
+      "sublabel": "router to supervisor hand-off",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/dispatch.py",
+          "line": 20,
+          "end_line": 63,
+          "label": "Dispatcher"
+        }
+      ]
+    },
+    {
+      "id": "routing",
+      "label": "routing/",
+      "parent": "pkg",
+      "sublabel": "where the work runs",
+      "sources": [
+        {
+          "path": "horizon_broker/routing/pd_dag.py",
+          "line": 65,
+          "end_line": 130,
+          "label": "PDDagRouter"
+        }
+      ]
+    },
+    {
+      "id": "pd_dag",
+      "label": "pd_dag.py",
+      "parent": "routing",
+      "sublabel": "the prefill/decode router",
+      "sources": [
+        {
+          "path": "horizon_broker/routing/pd_dag.py",
+          "line": 131,
+          "end_line": 200,
+          "label": "route"
+        }
+      ]
+    },
+    {
+      "id": "arithmetic",
+      "label": "arithmetic.py",
+      "parent": "routing",
+      "sublabel": "the FLOPs model",
+      "sources": [
+        {
+          "path": "horizon_broker/routing/arithmetic.py",
+          "line": 199,
+          "end_line": 246,
+          "label": "analyse"
+        }
+      ]
+    },
+    {
+      "id": "placement",
+      "label": "placement.py",
+      "parent": "routing",
+      "sublabel": "node scoring",
+      "sources": [
+        {
+          "path": "horizon_broker/routing/placement.py",
+          "line": 25,
+          "end_line": 100,
+          "label": "NodeSelector"
+        }
+      ]
+    },
+    {
+      "id": "nodes",
+      "label": "nodes/",
+      "parent": "pkg",
+      "sublabel": "the fleet and its failures",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 80,
+          "end_line": 140,
+          "label": "JobSupervisor"
+        }
+      ]
+    },
+    {
+      "id": "executor",
+      "label": "executor.py",
+      "parent": "nodes",
+      "sublabel": "the job supervisor",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 192,
+          "end_line": 260,
+          "label": "start and handle_event"
+        }
+      ]
+    },
+    {
+      "id": "registry",
+      "label": "registry.py",
+      "parent": "nodes",
+      "sublabel": "the authoritative fleet view",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/registry.py",
+          "line": 20,
+          "end_line": 135,
+          "label": "NodeRegistry"
+        }
+      ]
+    },
+    {
+      "id": "watchdog",
+      "label": "watchdog.py",
+      "parent": "nodes",
+      "sublabel": "silence becomes a verdict",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/watchdog.py",
+          "line": 34,
+          "end_line": 95,
+          "label": "FaultWatchdog"
+        }
+      ]
+    },
+    {
+      "id": "probe",
+      "label": "probe.py",
+      "parent": "nodes",
+      "sublabel": "heartbeat for direct nodes",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/probe.py",
+          "line": 36,
+          "end_line": 106,
+          "label": "NodeHealthProbe"
+        }
+      ]
+    },
+    {
+      "id": "connection",
+      "label": "connection.py",
+      "parent": "nodes",
+      "sublabel": "the websocket channel",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/connection.py",
+          "line": 74,
+          "end_line": 140,
+          "label": "NodeConnection"
+        }
+      ]
+    },
+    {
+      "id": "manager",
+      "label": "manager.py",
+      "parent": "nodes",
+      "sublabel": "one channel per node",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/manager.py",
+          "line": 26,
+          "end_line": 122,
+          "label": "NodeConnectionManager"
+        }
+      ]
+    },
+    {
+      "id": "recovery",
+      "label": "recovery/",
+      "parent": "pkg",
+      "sublabel": "surviving a dead node",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/recovery.py",
+          "line": 58,
+          "end_line": 120,
+          "label": "RecoveryCoordinator"
+        }
+      ]
+    },
+    {
+      "id": "recovery_coordinator",
+      "label": "recovery.py",
+      "parent": "recovery",
+      "sublabel": "load, validate, re-dispatch",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/recovery.py",
+          "line": 121,
+          "end_line": 180,
+          "label": "recover"
+        }
+      ]
+    },
+    {
+      "id": "snapshot_store",
+      "label": "snapshot_store.py",
+      "parent": "recovery",
+      "sublabel": "journal first, ledger second",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/snapshot_store.py",
+          "line": 39,
+          "end_line": 120,
+          "label": "SnapshotStore"
+        }
+      ]
+    },
+    {
+      "id": "ledger_client",
+      "label": "ledger.py",
+      "parent": "recovery",
+      "sublabel": "the EdgeRecord HTTP port",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/ledger.py",
+          "line": 36,
+          "end_line": 130,
+          "label": "EdgeRecordClient"
+        }
+      ]
+    },
+    {
+      "id": "journal",
+      "label": "journal.py",
+      "parent": "recovery",
+      "sublabel": "the local write-ahead log",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/journal.py",
+          "line": 20,
+          "end_line": 92,
+          "label": "LocalJournal"
+        }
+      ]
+    },
+    {
+      "id": "ollama",
+      "label": "ollama/",
+      "parent": "pkg",
+      "sublabel": "the engine client",
+      "sources": [
+        {
+          "path": "horizon_broker/ollama/client.py",
+          "line": 38,
+          "end_line": 141,
+          "label": "OllamaClient"
+        }
+      ]
+    },
+    {
+      "id": "client",
+      "label": "client.py",
+      "parent": "ollama",
+      "sublabel": "streaming NDJSON",
+      "sources": [
+        {
+          "path": "horizon_broker/ollama/client.py",
+          "line": 94,
+          "end_line": 141,
+          "label": "generate"
+        }
+      ]
+    },
+    {
+      "id": "observability",
+      "label": "observability/",
+      "parent": "pkg",
+      "sublabel": "metrics and logs",
+      "sources": [
+        {
+          "path": "horizon_broker/observability/metrics.py",
+          "line": 17,
+          "end_line": 144,
+          "label": "MetricsRegistry"
+        }
+      ]
+    },
+    {
+      "id": "metrics",
+      "label": "metrics.py",
+      "parent": "observability",
+      "sublabel": "prometheus text exposition",
+      "sources": [
+        {
+          "path": "horizon_broker/observability/metrics.py",
+          "line": 85,
+          "end_line": 144,
+          "label": "render"
+        }
+      ]
+    },
+    {
+      "id": "logging",
+      "label": "logging.py",
+      "parent": "observability",
+      "sublabel": "single-line JSON logs",
+      "sources": [
+        {
+          "path": "horizon_broker/observability/logging.py",
+          "line": 12,
+          "end_line": 37,
+          "label": "JsonFormatter"
+        }
+      ]
+    },
+    {
+      "id": "cli",
+      "label": "cli.py",
+      "parent": "pkg",
+      "sublabel": "the operator client",
+      "sources": [
+        {
+          "path": "horizon_broker/cli.py",
+          "line": 137,
+          "end_line": 205,
+          "label": "the CLI"
+        }
+      ]
+    },
+    {
+      "id": "main",
+      "label": "__main__.py",
+      "parent": "pkg",
+      "sublabel": "serve, check-config, drain",
+      "sources": [
+        {
+          "path": "horizon_broker/__main__.py",
+          "line": 43,
+          "end_line": 111,
+          "label": "run_server"
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "label": "config.py",
+      "parent": "pkg",
+      "sublabel": "file, env and defaults",
+      "sources": [
+        {
+          "path": "horizon_broker/config.py",
+          "line": 312,
+          "end_line": 397,
+          "label": "load_config"
+        }
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Three seams",
+      "items": [
+        "contracts/ is the wire format every other package imports",
+        "ingress/ validates and hands over, and never touches the queue",
+        "scheduler/ produces dispatch batches and never talks to a node"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Two durability layers",
+      "items": [
+        "recovery/ writes the journal first and the ledger second",
+        "A ledger outage degrades durability to machine-local, never to lost",
+        "The snapshot carries the prompt hash, so a mismatch is rejected"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "One broker, one fleet",
+      "items": [
+        "nodes/ owns the whole fleet view and every failure verdict",
+        "routing/ decides where the work runs, never whether it runs",
+        "There is no broker-to-broker coordination in this tree yet"
+      ]
+    }
+  ]
+}

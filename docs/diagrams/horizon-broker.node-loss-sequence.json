@@ -3,51 +3,340 @@
   "diagram_type": "sequence",
   "meta": {
     "title": "One job across a node loss",
-    "viewBox": [1060, 545],
+    "output": "horizon-broker-node-loss-sequence.html",
+    "quality_profile": "showcase",
     "column_fit": "spread",
-    "quality_profile": "showcase"
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "legend": {
+      "mode": "all",
+      "entries": {
+        "default": {
+          "label": "the ordinary path"
+        },
+        "emphasis": {
+          "label": "the primary step"
+        },
+        "security": {
+          "label": "the fault path"
+        },
+        "dashed": {
+          "label": "the durable write"
+        },
+        "return": {
+          "label": "the answer back"
+        }
+      }
+    },
+    "views": [
+      {
+        "id": "accept",
+        "label": "Accept before it runs",
+        "focus": [
+          "agent",
+          "ingress"
+        ],
+        "note": "The caller is answered with a job id before any engine work starts."
+      },
+      {
+        "id": "execute",
+        "label": "Execute and checkpoint",
+        "focus": [
+          "supervisor",
+          "engine",
+          "ledger"
+        ],
+        "note": "The checkpoint cadence that makes a later recovery possible."
+      },
+      {
+        "id": "recover",
+        "label": "The node loss",
+        "focus": [
+          "watchdog",
+          "supervisor"
+        ],
+        "note": "The verdict, the exclusion and the direct re-dispatch."
+      }
+    ]
   },
   "participants": [
-    { "id": "client", "type": "external", "label": "Agent", "sublabel": "OpenAI client" },
-    { "id": "ingress", "type": "backend", "label": "Ingress API", "sublabel": "ingress/app.py" },
-    { "id": "queue", "type": "messagebus", "label": "Job Queue", "sublabel": "scheduler/" },
-    { "id": "router", "type": "backend", "label": "PD-DAG Router", "sublabel": "routing/" },
-    { "id": "executor", "type": "backend", "label": "Job Supervisor", "sublabel": "nodes/executor.py" },
-    { "id": "engine", "type": "cloud", "label": "Inference Node", "sublabel": "Ollama or agent" },
-    { "id": "watchdog", "type": "security", "label": "Watchdog", "sublabel": "nodes/watchdog.py" },
-    { "id": "store", "type": "database", "label": "Snapshot Store", "sublabel": "journal and ledger" }
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "The agent",
+      "sublabel": "any OpenAI client",
+      "icon": "external",
+      "brand": "openai",
+      "sources": [
+        {
+          "path": "horizon_broker/ingress/openai.py",
+          "line": 85,
+          "end_line": 121,
+          "label": "the OpenAI-compatible ingress"
+        }
+      ]
+    },
+    {
+      "id": "ingress",
+      "type": "backend",
+      "label": "The ingress API",
+      "sublabel": "ingress/app.py",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "horizon_broker/ingress/app.py",
+          "line": 47,
+          "end_line": 120,
+          "label": "the routes"
+        }
+      ]
+    },
+    {
+      "id": "supervisor",
+      "type": "backend",
+      "label": "The job supervisor",
+      "sublabel": "nodes/executor.py",
+      "icon": "backend",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 192,
+          "end_line": 240,
+          "label": "the supervisor"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "cloud",
+      "label": "The engine",
+      "sublabel": "Ollama or an agent container",
+      "icon": "cloud",
+      "brand": "ollama",
+      "sources": [
+        {
+          "path": "horizon_broker/ollama/client.py",
+          "line": 94,
+          "end_line": 141,
+          "label": "the engine client"
+        }
+      ]
+    },
+    {
+      "id": "watchdog",
+      "type": "security",
+      "label": "The watchdog",
+      "sublabel": "nodes/watchdog.py",
+      "icon": "security",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/watchdog.py",
+          "line": 65,
+          "end_line": 95,
+          "label": "the silence verdict"
+        }
+      ]
+    },
+    {
+      "id": "ledger",
+      "type": "database",
+      "label": "The snapshot store",
+      "sublabel": "journal and EdgeRecord",
+      "icon": "database",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/snapshot_store.py",
+          "line": 39,
+          "end_line": 120,
+          "label": "the write and read path"
+        }
+      ]
+    }
   ],
   "segments": [
-    { "from": 150, "to": 250, "label": "Accept and route" },
-    { "from": 250, "to": 350, "label": "Execute and checkpoint" },
-    { "from": 350, "to": 480, "label": "Node loss and recovery" }
+    {
+      "from": 150,
+      "to": 320,
+      "label": "Accept"
+    },
+    {
+      "from": 320,
+      "to": 500,
+      "label": "Execute and checkpoint"
+    },
+    {
+      "from": 500,
+      "to": 830,
+      "label": "Node loss and recovery"
+    }
   ],
   "messages": [
-    { "id": "m1", "from": "client", "to": "ingress", "y": 180, "label": "POST /v1/chat/completions", "variant": "emphasis" },
-    { "id": "m2", "from": "ingress", "to": "queue", "y": 208, "label": "submit job", "variant": "emphasis" },
-    { "id": "m3", "from": "ingress", "to": "client", "y": 236, "label": "202 + job_id" },
-    { "id": "m4", "from": "router", "to": "executor", "y": 264, "label": "routing decision", "variant": "emphasis" },
-    { "id": "m5", "from": "executor", "to": "engine", "y": 292, "label": "assign job", "variant": "emphasis" },
-    { "id": "m6", "from": "engine", "to": "executor", "y": 320, "label": "progress and checkpoint" },
-    { "id": "m7", "from": "executor", "to": "store", "y": 348, "label": "write snapshot", "variant": "dashed" },
-    { "id": "m8", "from": "watchdog", "to": "executor", "y": 376, "label": "node LOST after 6s", "variant": "security" },
-    { "id": "m9", "from": "executor", "to": "store", "y": 404, "label": "load newest snapshot", "variant": "dashed" },
-    { "id": "m10", "from": "executor", "to": "engine", "y": 432, "label": "re-assign, resume", "variant": "emphasis" },
-    { "id": "m11", "from": "executor", "to": "ingress", "y": 460, "label": "job completed" }
+    {
+      "id": "m1",
+      "from": "agent",
+      "to": "ingress",
+      "y": 180,
+      "label": "POST /v1/chat/completions",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m2",
+      "from": "ingress",
+      "to": "supervisor",
+      "y": 240,
+      "label": "submit the job",
+      "variant": "emphasis",
+      "note": "The ingress answers 202 before any work starts."
+    },
+    {
+      "id": "m3",
+      "from": "ingress",
+      "to": "agent",
+      "y": 300,
+      "label": "202 + job_id",
+      "variant": "return"
+    },
+    {
+      "id": "m4",
+      "from": "supervisor",
+      "to": "engine",
+      "y": 360,
+      "label": "assign the job",
+      "variant": "emphasis",
+      "note": "The supervisor starts the generation."
+    },
+    {
+      "id": "m5",
+      "from": "engine",
+      "to": "supervisor",
+      "y": 420,
+      "label": "progress and checkpoint",
+      "variant": "default",
+      "note": "Every 64 tokens a snapshot is committed."
+    },
+    {
+      "id": "m6",
+      "from": "supervisor",
+      "to": "ledger",
+      "y": 480,
+      "label": "write the snapshot",
+      "variant": "dashed",
+      "note": "The journal first, the ledger second."
+    },
+    {
+      "id": "m7",
+      "from": "watchdog",
+      "to": "supervisor",
+      "y": 540,
+      "label": "node LOST",
+      "variant": "security",
+      "note": "Silence past the heartbeat timeout."
+    },
+    {
+      "id": "m8",
+      "from": "supervisor",
+      "to": "ledger",
+      "y": 600,
+      "label": "read the newest snapshot",
+      "variant": "default",
+      "note": "The ledger first, the journal second."
+    },
+    {
+      "id": "m9",
+      "from": "supervisor",
+      "to": "engine",
+      "y": 660,
+      "label": "re-assign elsewhere",
+      "variant": "emphasis",
+      "note": "Directly, never re-queued."
+    },
+    {
+      "id": "m10",
+      "from": "engine",
+      "to": "supervisor",
+      "y": 720,
+      "label": "resume from the decode step",
+      "variant": "default"
+    },
+    {
+      "id": "m11",
+      "from": "supervisor",
+      "to": "agent",
+      "y": 780,
+      "label": "the completion",
+      "variant": "return",
+      "note": "The caller gets the measured token counts."
+    }
   ],
   "activations": [
-    { "participant": "ingress", "from": 174, "to": 226, "type": "backend" },
-    { "participant": "queue", "from": 202, "to": 250, "type": "messagebus" },
-    { "participant": "router", "from": 258, "to": 286, "type": "backend" },
-    { "participant": "executor", "from": 258, "to": 452, "type": "backend" },
-    { "participant": "engine", "from": 286, "to": 314, "type": "cloud" },
-    { "participant": "engine", "from": 426, "to": 454, "type": "cloud" },
-    { "participant": "watchdog", "from": 366, "to": 386, "type": "security" },
-    { "participant": "store", "from": 340, "to": 398, "type": "database" }
+    {
+      "participant": "ingress",
+      "from": 174,
+      "to": 292,
+      "type": "backend"
+    },
+    {
+      "participant": "supervisor",
+      "from": 234,
+      "to": 712,
+      "type": "backend"
+    },
+    {
+      "participant": "engine",
+      "from": 354,
+      "to": 410,
+      "type": "cloud"
+    },
+    {
+      "participant": "engine",
+      "from": 654,
+      "to": 710,
+      "type": "cloud"
+    },
+    {
+      "participant": "watchdog",
+      "from": 526,
+      "to": 554,
+      "type": "security"
+    },
+    {
+      "participant": "ledger",
+      "from": 470,
+      "to": 590,
+      "type": "database"
+    }
   ],
   "cards": [
-    { "dot": "emerald", "title": "Accepted before it runs", "items": ["The ingress answers 202 with a job id before any engine work starts", "Both ingresses produce the same InferenceJob"] },
-    { "dot": "amber", "title": "Durable by default", "items": ["Every checkpoint is written to the journal first and the ledger second", "The snapshot carries the prompt hash so a mismatch is rejected"] },
-    { "dot": "rose", "title": "Bounded by the budget", "items": ["Silence for longer than the heartbeat timeout declares the node LOST", "The retry budget is finite and ends the job loudly"] }
+    {
+      "dot": "emerald",
+      "title": "Accepted before it runs",
+      "items": [
+        "The caller receives a durable job id before any engine work starts",
+        "Both ingresses produce the same InferenceJob, so the path after this point is identical",
+        "The interactive lane dispatches at once and the flex lane waits for a batch"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Durable by default",
+      "items": [
+        "Every checkpoint is written to the journal first and the ledger second",
+        "The snapshot carries the prompt hash, so a mismatch is rejected rather than replayed",
+        "The failed node is excluded from the next attempt"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Bounded by the budget",
+      "items": [
+        "Silence past the heartbeat timeout declares the node LOST",
+        "Recovery is direct, never re-queued through the shared lane",
+        "The retry budget is finite and ends the job loudly"
+      ]
+    }
   ]
 }

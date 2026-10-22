@@ -1,0 +1,425 @@
+{
+  "schema_version": 1,
+  "diagram_type": "erd",
+  "meta": {
+    "title": "The durable state the broker persists",
+    "output": "horizon-broker-state-erd.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      {
+        "id": "recovery-state",
+        "label": "The recovery state",
+        "focus": [
+          "snapshots",
+          "resume_points",
+          "partial_tokens"
+        ],
+        "note": "What survives a dead node, and how the three documents hold each other."
+      },
+      {
+        "id": "envelope",
+        "label": "The ledger envelope",
+        "focus": [
+          "ledger_documents"
+        ],
+        "note": "The shared record every snapshot becomes when it is committed."
+      },
+      {
+        "id": "job-and-fleet",
+        "label": "The job and the fleet",
+        "focus": [
+          "jobs",
+          "nodes"
+        ],
+        "note": "The two things a snapshot points back at."
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      40,
+      90
+    ],
+    "gapX": 70,
+    "gapY": 26,
+    "entityW": 285,
+    "headerH": 40,
+    "rowH": 40
+  },
+  "entities": [
+    {
+      "id": "ledger_documents",
+      "label": "ledger_documents",
+      "sublabel": "the EdgeRecord envelope",
+      "tag": "Ledger envelope",
+      "row": 0,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "document_id",
+          "type": "str",
+          "key": "pk"
+        },
+        {
+          "name": "collection",
+          "type": "str"
+        },
+        {
+          "name": "schema_version",
+          "type": "str"
+        },
+        {
+          "name": "content_hash",
+          "type": "str",
+          "key": "uk"
+        },
+        {
+          "name": "created_at",
+          "type": "datetime"
+        },
+        {
+          "name": "tags",
+          "type": "tuple[str, ...]"
+        },
+        {
+          "name": "snapshot_id",
+          "type": "str",
+          "key": "fk",
+          "references": "snapshots.snapshot_id"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/ledger.py",
+          "line": 26,
+          "end_line": 62,
+          "label": "LedgerRecord"
+        }
+      ]
+    },
+    {
+      "id": "snapshots",
+      "label": "fault_recovery_snapshots",
+      "sublabel": "one checkpoint per attempt",
+      "tag": "Recovery state",
+      "row": 0,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "snapshot_id",
+          "type": "str",
+          "key": "pk"
+        },
+        {
+          "name": "job_id",
+          "type": "str",
+          "key": "fk",
+          "references": "jobs.job_id"
+        },
+        {
+          "name": "node_id",
+          "type": "str",
+          "key": "fk",
+          "references": "nodes.node_id"
+        },
+        {
+          "name": "model",
+          "type": "str"
+        },
+        {
+          "name": "step",
+          "type": "int"
+        },
+        {
+          "name": "attempt",
+          "type": "int"
+        },
+        {
+          "name": "created_at",
+          "type": "datetime"
+        },
+        {
+          "name": "schema_version",
+          "type": "str"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/recovery.py",
+          "line": 62,
+          "end_line": 106,
+          "label": "FaultRecoverySnapshot"
+        }
+      ]
+    },
+    {
+      "id": "resume_points",
+      "label": "resume_points",
+      "sublabel": "where to pick the work up",
+      "tag": "Recovery state",
+      "row": 1,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "snapshot_id",
+          "type": "str",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "snapshots.snapshot_id"
+        },
+        {
+          "name": "decode_step",
+          "type": "int"
+        },
+        {
+          "name": "generated_token_count",
+          "type": "int"
+        },
+        {
+          "name": "kv_cache_ref",
+          "type": "str | None"
+        },
+        {
+          "name": "prompt_hash",
+          "type": "str"
+        },
+        {
+          "name": "model",
+          "type": "str"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/recovery.py",
+          "line": 45,
+          "end_line": 60,
+          "label": "ResumePoint"
+        }
+      ]
+    },
+    {
+      "id": "partial_tokens",
+      "label": "partial_tokens",
+      "sublabel": "the finished tokens",
+      "tag": "Recovery state",
+      "row": 2,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "snapshot_id",
+          "type": "str",
+          "key": [
+            "pk",
+            "fk"
+          ],
+          "references": "snapshots.snapshot_id"
+        },
+        {
+          "name": "token_index",
+          "type": "int",
+          "key": "pk"
+        },
+        {
+          "name": "token_id",
+          "type": "int | None"
+        },
+        {
+          "name": "text",
+          "type": "str"
+        },
+        {
+          "name": "logprob",
+          "type": "float | None"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/recovery.py",
+          "line": 36,
+          "end_line": 43,
+          "label": "PartialToken"
+        }
+      ]
+    },
+    {
+      "id": "jobs",
+      "label": "jobs",
+      "sublabel": "the job envelope",
+      "tag": "Job and fleet",
+      "row": 0,
+      "col": 2,
+      "attributes": [
+        {
+          "name": "job_id",
+          "type": "str",
+          "key": "pk"
+        },
+        {
+          "name": "priority_tier",
+          "type": "PriorityTier"
+        },
+        {
+          "name": "state",
+          "type": "JobState"
+        },
+        {
+          "name": "payload",
+          "type": "dict[str, Any]"
+        },
+        {
+          "name": "max_acceptable_latency_ms",
+          "type": "int"
+        },
+        {
+          "name": "submitted_at",
+          "type": "datetime"
+        },
+        {
+          "name": "deadline_at",
+          "type": "datetime | None"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 186,
+          "end_line": 260,
+          "label": "InferenceJob"
+        }
+      ]
+    },
+    {
+      "id": "nodes",
+      "label": "nodes",
+      "sublabel": "the fleet snapshot",
+      "tag": "Job and fleet",
+      "row": 1,
+      "col": 2,
+      "attributes": [
+        {
+          "name": "node_id",
+          "type": "str",
+          "key": "pk"
+        },
+        {
+          "name": "role",
+          "type": "NodeRole"
+        },
+        {
+          "name": "health",
+          "type": "NodeHealth"
+        },
+        {
+          "name": "execution_mode",
+          "type": "ExecutionMode"
+        },
+        {
+          "name": "available_vram_bytes",
+          "type": "int"
+        },
+        {
+          "name": "model_whitelist",
+          "type": "tuple[str, ...]"
+        },
+        {
+          "name": "last_heartbeat_at",
+          "type": "datetime | None"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/nodes.py",
+          "line": 67,
+          "end_line": 142,
+          "label": "NodeCapability"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "r-doc-snapshot",
+      "from": "ledger_documents",
+      "to": "snapshots",
+      "label": "commits",
+      "fromCardinality": "one",
+      "toCardinality": "one",
+      "identifying": true
+    },
+    {
+      "id": "r-snapshot-resume",
+      "from": "snapshots",
+      "to": "resume_points",
+      "label": "carries",
+      "fromCardinality": "one",
+      "toCardinality": "one",
+      "identifying": true,
+      "labelDy": 24
+    },
+    {
+      "id": "r-snapshot-tokens",
+      "from": "snapshots",
+      "to": "partial_tokens",
+      "label": "replays",
+      "fromCardinality": "one",
+      "toCardinality": "many",
+      "identifying": true
+    },
+    {
+      "id": "r-job-snapshot",
+      "from": "jobs",
+      "to": "snapshots",
+      "label": "attempts",
+      "fromCardinality": "one",
+      "toCardinality": "many",
+      "identifying": false
+    },
+    {
+      "id": "r-node-snapshot",
+      "from": "nodes",
+      "to": "snapshots",
+      "label": "ran on",
+      "fromCardinality": "one",
+      "toCardinality": "many",
+      "identifying": false
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "This is a document model, not a schema",
+      "items": [
+        "The broker persists JSON documents, so the types here are the contract field types",
+        "There is no SQL in the broker; the column names are the contract field names",
+        "The one-to-many ends are the attempts and the replayed tokens"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Two layers, one key",
+      "items": [
+        "Every snapshot is committed as a ledger document with a content hash",
+        "The resume point and the partial tokens hang off the snapshot, not off the document",
+        "The prompt hash inside the resume point is what makes a mismatch rejectable"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What is not durable yet",
+      "items": [
+        "The job envelope is journalled but the rebuild path is never called",
+        "The fleet snapshot lives in memory only",
+        "Phase 1 of the roadmap makes the replay real"
+      ]
+    }
+  ]
+}

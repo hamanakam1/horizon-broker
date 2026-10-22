@@ -1,0 +1,698 @@
+{
+  "schema_version": 1,
+  "diagram_type": "class",
+  "meta": {
+    "title": "The broker's contract types",
+    "output": "horizon-broker-contract-classes.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      {
+        "id": "job-side",
+        "label": "The job side",
+        "focus": [
+          "job",
+          "payload",
+          "tier",
+          "state"
+        ],
+        "note": "What a caller submits and what the broker keeps while it runs."
+      },
+      {
+        "id": "fleet-side",
+        "label": "The fleet side",
+        "focus": [
+          "capability",
+          "health"
+        ],
+        "note": "What the broker believes about a node, and the health enum it sorts that belief into."
+      },
+      {
+        "id": "control-side",
+        "label": "The proposed control plane",
+        "focus": [
+          "fleet_control",
+          "engine"
+        ],
+        "note": "The one interface the v1.0 plan proposes, and the engine that would realize it."
+      }
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "gapX": 40,
+    "gapY": 44,
+    "typeW": 170,
+    "typeMaxW": 260
+  },
+  "types": [
+    {
+      "id": "engine",
+      "label": "BrokerEngine",
+      "kind": "class",
+      "sublabel": "the runtime",
+      "row": 3,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "config",
+          "type": "BrokerConfig"
+        },
+        {
+          "name": "queue",
+          "type": "JobPriorityQueue"
+        },
+        {
+          "name": "router",
+          "type": "PDDagRouter"
+        },
+        {
+          "name": "supervisor",
+          "type": "JobSupervisor"
+        }
+      ],
+      "methods": [
+        {
+          "name": "submit",
+          "parameters": "job: InferenceJob",
+          "returns": "None"
+        },
+        {
+          "name": "drain",
+          "parameters": "timeout: float",
+          "returns": "bool"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/engine.py",
+          "line": 63,
+          "end_line": 140,
+          "label": "BrokerEngine"
+        }
+      ]
+    },
+    {
+      "id": "fleet_control",
+      "label": "FleetControl",
+      "kind": "interface",
+      "sublabel": "proposed for v1.0 (the plan)",
+      "row": 3,
+      "col": 1,
+      "methods": [
+        {
+          "name": "acquire_lease",
+          "parameters": "fleet_id: str",
+          "returns": "Lease"
+        },
+        {
+          "name": "publish_job",
+          "parameters": "job: InferenceJob",
+          "returns": "None"
+        }
+      ],
+      "sources": [
+        {
+          "path": "docs/ROADMAP.md",
+          "line": 166,
+          "end_line": 167,
+          "label": "the planned control plane"
+        }
+      ]
+    },
+    {
+      "id": "broker_model",
+      "label": "BrokerModel",
+      "kind": "abstract",
+      "sublabel": "the strict base",
+      "row": 0,
+      "col": 1,
+      "methods": [
+        {
+          "name": "model_copy",
+          "parameters": "update: dict[str, Any]",
+          "returns": "BrokerModel"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 39,
+          "end_line": 43,
+          "label": "the base model"
+        }
+      ]
+    },
+    {
+      "id": "broker_error",
+      "label": "BrokerError",
+      "kind": "abstract",
+      "sublabel": "the taxonomy",
+      "row": 0,
+      "col": 2,
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/errors.py",
+          "line": 11,
+          "end_line": 34,
+          "label": "BrokerError and its branches"
+        }
+      ]
+    },
+    {
+      "id": "ledger_error",
+      "label": "LedgerError",
+      "kind": "abstract",
+      "sublabel": "the ledger branch",
+      "row": 0,
+      "col": 3,
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/errors.py",
+          "line": 35,
+          "end_line": 40,
+          "label": "LedgerError and LedgerUnavailableError"
+        }
+      ]
+    },
+    {
+      "id": "job",
+      "label": "InferenceJob",
+      "kind": "class",
+      "sublabel": "the unit of work",
+      "row": 1,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "job_id",
+          "type": "str"
+        },
+        {
+          "name": "priority_tier",
+          "type": "PriorityTier"
+        },
+        {
+          "name": "payload",
+          "type": "InferencePayload"
+        },
+        {
+          "name": "max_acceptable_latency_ms",
+          "type": "int"
+        },
+        {
+          "name": "state",
+          "type": "JobState"
+        },
+        {
+          "name": "attempt",
+          "type": "int"
+        }
+      ],
+      "methods": [
+        {
+          "name": "remaining_latency_ms",
+          "parameters": "now: datetime | None = None",
+          "returns": "int"
+        },
+        {
+          "name": "is_expired",
+          "parameters": "now: datetime | None = None",
+          "returns": "bool"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 186,
+          "end_line": 260,
+          "label": "InferenceJob"
+        }
+      ]
+    },
+    {
+      "id": "payload",
+      "label": "InferencePayload",
+      "kind": "class",
+      "sublabel": "what the engine is asked",
+      "row": 1,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "model",
+          "type": "str"
+        },
+        {
+          "name": "prompt",
+          "type": "str"
+        },
+        {
+          "name": "messages",
+          "type": "list[ChatMessage]"
+        },
+        {
+          "name": "parameters",
+          "type": "SamplingParams"
+        }
+      ],
+      "methods": [
+        {
+          "name": "prompt_hash",
+          "returns": "str"
+        },
+        {
+          "name": "to_engine_request",
+          "parameters": "model_override: str | None = None",
+          "returns": "dict[str, Any]"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 112,
+          "end_line": 183,
+          "label": "InferencePayload"
+        }
+      ]
+    },
+    {
+      "id": "capability",
+      "label": "NodeCapability",
+      "kind": "class",
+      "sublabel": "what a node can do",
+      "row": 1,
+      "col": 2,
+      "attributes": [
+        {
+          "name": "node_id",
+          "type": "str"
+        },
+        {
+          "name": "role",
+          "type": "NodeRole"
+        },
+        {
+          "name": "model_whitelist",
+          "type": "tuple[str, ...]"
+        },
+        {
+          "name": "available_vram_bytes",
+          "type": "int"
+        },
+        {
+          "name": "health",
+          "type": "NodeHealth"
+        }
+      ],
+      "methods": [
+        {
+          "name": "supports_model",
+          "parameters": "model: str",
+          "returns": "bool"
+        },
+        {
+          "name": "accepts_work",
+          "parameters": "model: str",
+          "returns": "bool"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/nodes.py",
+          "line": 67,
+          "end_line": 142,
+          "label": "NodeCapability"
+        }
+      ]
+    },
+    {
+      "id": "snapshot",
+      "label": "FaultRecoverySnapshot",
+      "kind": "record",
+      "sublabel": "the checkpoint",
+      "row": 1,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "snapshot_id",
+          "type": "str"
+        },
+        {
+          "name": "job_id",
+          "type": "str"
+        },
+        {
+          "name": "node_id",
+          "type": "str"
+        },
+        {
+          "name": "step",
+          "type": "int"
+        },
+        {
+          "name": "resume_point",
+          "type": "ResumePoint"
+        }
+      ],
+      "methods": [
+        {
+          "name": "compute_content_hash",
+          "returns": "str"
+        },
+        {
+          "name": "to_ledger_body",
+          "returns": "dict[str, Any]"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/recovery.py",
+          "line": 62,
+          "end_line": 106,
+          "label": "FaultRecoverySnapshot"
+        }
+      ]
+    },
+    {
+      "id": "tier",
+      "label": "PriorityTier",
+      "kind": "enum",
+      "row": 2,
+      "col": 0,
+      "attributes": [
+        {
+          "name": "INTERACTIVE"
+        },
+        {
+          "name": "FLEX"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 45,
+          "end_line": 49,
+          "label": "PriorityTier"
+        }
+      ]
+    },
+    {
+      "id": "state",
+      "label": "JobState",
+      "kind": "enum",
+      "row": 2,
+      "col": 1,
+      "attributes": [
+        {
+          "name": "QUEUED"
+        },
+        {
+          "name": "WINDOWING"
+        },
+        {
+          "name": "DISPATCHED"
+        },
+        {
+          "name": "RUNNING"
+        },
+        {
+          "name": "RECOVERING"
+        },
+        {
+          "name": "COMPLETED"
+        },
+        {
+          "name": "FAILED"
+        },
+        {
+          "name": "CANCELLED"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/jobs.py",
+          "line": 52,
+          "end_line": 62,
+          "label": "JobState"
+        }
+      ]
+    },
+    {
+      "id": "health",
+      "label": "NodeHealth",
+      "kind": "enum",
+      "row": 2,
+      "col": 2,
+      "attributes": [
+        {
+          "name": "HEALTHY"
+        },
+        {
+          "name": "DEGRADED"
+        },
+        {
+          "name": "DRAINING"
+        },
+        {
+          "name": "SUSPECT"
+        },
+        {
+          "name": "LOST"
+        },
+        {
+          "name": "OFFLINE"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/nodes.py",
+          "line": 54,
+          "end_line": 64,
+          "label": "NodeHealth"
+        }
+      ]
+    },
+    {
+      "id": "resume",
+      "label": "ResumePoint",
+      "kind": "record",
+      "sublabel": "where to pick up",
+      "row": 2,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "decode_step",
+          "type": "int"
+        },
+        {
+          "name": "generated_token_count",
+          "type": "int"
+        },
+        {
+          "name": "kv_cache_ref",
+          "type": "str | None"
+        },
+        {
+          "name": "prompt_hash",
+          "type": "str"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/recovery.py",
+          "line": 45,
+          "end_line": 60,
+          "label": "ResumePoint"
+        }
+      ]
+    },
+    {
+      "id": "snapshot_store",
+      "label": "SnapshotStore",
+      "kind": "class",
+      "sublabel": "journal first, ledger second",
+      "row": 3,
+      "col": 2,
+      "methods": [
+        {
+          "name": "commit",
+          "parameters": "snapshot: FaultRecoverySnapshot",
+          "returns": "None"
+        },
+        {
+          "name": "latest_for_job",
+          "parameters": "job_id: str",
+          "returns": "FaultRecoverySnapshot | None"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/snapshot_store.py",
+          "line": 39,
+          "end_line": 120,
+          "label": "SnapshotStore"
+        }
+      ]
+    },
+    {
+      "id": "ledger_record",
+      "label": "LedgerRecord",
+      "kind": "record",
+      "sublabel": "the shared envelope",
+      "row": 3,
+      "col": 3,
+      "attributes": [
+        {
+          "name": "collection",
+          "type": "str"
+        },
+        {
+          "name": "document_id",
+          "type": "str"
+        },
+        {
+          "name": "payload",
+          "type": "dict[str, Any]"
+        },
+        {
+          "name": "content_hash",
+          "type": "str"
+        }
+      ],
+      "methods": [
+        {
+          "name": "verify",
+          "returns": "bool"
+        }
+      ],
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/ledger.py",
+          "line": 26,
+          "end_line": 62,
+          "label": "LedgerRecord"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "r-job-model",
+      "from": "job",
+      "to": "broker_model",
+      "kind": "inheritance"
+    },
+    {
+      "id": "r-payload-model",
+      "from": "payload",
+      "to": "broker_model",
+      "kind": "inheritance"
+    },
+    {
+      "id": "r-capability-model",
+      "from": "capability",
+      "to": "broker_model",
+      "kind": "inheritance"
+    },
+    {
+      "id": "r-snapshot-model",
+      "from": "snapshot",
+      "to": "broker_model",
+      "kind": "inheritance"
+    },
+    {
+      "id": "r-ledger-error",
+      "from": "ledger_error",
+      "to": "broker_error",
+      "kind": "inheritance"
+    },
+    {
+      "id": "r-engine-control",
+      "from": "engine",
+      "to": "fleet_control",
+      "kind": "realization",
+      "label": "v1.0"
+    },
+    {
+      "id": "r-job-payload",
+      "from": "job",
+      "to": "payload",
+      "kind": "composition"
+    },
+    {
+      "id": "r-job-tier",
+      "from": "job",
+      "to": "tier",
+      "kind": "dependency",
+      "label": "tier"
+    },
+    {
+      "id": "r-job-state",
+      "from": "job",
+      "to": "state",
+      "kind": "dependency",
+      "label": "state"
+    },
+    {
+      "id": "r-capability-health",
+      "from": "capability",
+      "to": "health",
+      "kind": "dependency",
+      "label": "health"
+    },
+    {
+      "id": "r-snapshot-resume",
+      "from": "snapshot",
+      "to": "resume",
+      "kind": "aggregation",
+      "label": "owns"
+    },
+    {
+      "id": "r-store-ledger",
+      "from": "snapshot_store",
+      "to": "ledger_record",
+      "kind": "association",
+      "label": "writes"
+    },
+    {
+      "id": "r-engine-store",
+      "from": "engine",
+      "to": "snapshot_store",
+      "kind": "composition",
+      "label": "owns"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One base model, one rule",
+      "items": [
+        "Every wire type inherits BrokerModel, which forbids unknown fields",
+        "Adding a field is a contract change, not a convenience",
+        "The base is abstract on purpose: nothing constructs it directly"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Enums carry the state machine",
+      "items": [
+        "JobState and NodeHealth are the vocabulary of the broker",
+        "A new state is a contract change that every consumer sees",
+        "The lifecycle diagram reads these enums as its states"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "One type is a proposal",
+      "items": [
+        "FleetControl does not exist yet; the roadmap proposes it for v1.0",
+        "It is the only interface in the plan, and the engine would realize it",
+        "Everything else on this diagram is in the code today"
+      ]
+    }
+  ]
+}

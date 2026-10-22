@@ -1,86 +1,176 @@
 {
-  "schema_version": 1,
+  "schema_version": 3,
   "diagram_type": "lifecycle",
   "meta": {
-    "title": "InferenceJob state machine",
+    "title": "The InferenceJob state machine",
+    "output": "horizon-broker-job-lifecycle.html",
     "quality_profile": "showcase",
-    "viewBox": [
-      1080,
-      660
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      {
+        "id": "main-path",
+        "label": "The main path",
+        "focus": [
+          "queued",
+          "windowing",
+          "dispatched",
+          "running",
+          "completed"
+        ],
+        "note": "The five states a caller walks through."
+      },
+      {
+        "id": "fault-path",
+        "label": "The fault path",
+        "focus": [
+          "running",
+          "recovering",
+          "failed"
+        ],
+        "note": "What a node loss does to the job."
+      },
+      {
+        "id": "operator-exit",
+        "label": "The operator exit",
+        "focus": [
+          "dispatched",
+          "cancelled"
+        ],
+        "note": "Where a cancellation lands."
+      }
     ]
   },
-  "lanes": [
-    {
-      "id": "main",
-      "label": "Job states"
-    },
-    {
-      "id": "faults",
-      "label": "Fault handling and terminal exits"
-    }
+  "mainPath": [
+    "queued",
+    "windowing",
+    "dispatched",
+    "running",
+    "completed"
   ],
   "states": [
     {
       "id": "queued",
       "type": "start",
       "label": "Queued",
-      "sublabel": "ingress",
-      "lane": "main",
-      "col": 0,
-      "tag": "entry"
+      "sublabel": "accepted by the ingress",
+      "tag": "entry",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/engine.py",
+          "line": 239,
+          "end_line": 248,
+          "label": "submit"
+        }
+      ]
     },
     {
       "id": "windowing",
       "type": "active",
       "label": "Windowing",
-      "sublabel": "flex batch",
-      "lane": "main",
-      "col": 1,
-      "tag": "sleep-time"
+      "sublabel": "the flex batch is held",
+      "tag": "sleep-time",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/window.py",
+          "line": 97,
+          "end_line": 124,
+          "label": "evaluate_window"
+        }
+      ]
     },
     {
       "id": "dispatched",
       "type": "active",
       "label": "Dispatched",
-      "sublabel": "node chosen",
-      "lane": "main",
-      "col": 2
+      "sublabel": "the router chose a node",
+      "sources": [
+        {
+          "path": "horizon_broker/routing/pd_dag.py",
+          "line": 131,
+          "end_line": 200,
+          "label": "route"
+        }
+      ]
     },
     {
       "id": "running",
       "type": "active",
       "label": "Running",
-      "sublabel": "generating",
-      "lane": "main",
-      "col": 3,
-      "tag": "work"
+      "sublabel": "generating on the node",
+      "tag": "work",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 192,
+          "end_line": 240,
+          "label": "start"
+        }
+      ]
     },
     {
       "id": "completed",
       "type": "success",
       "label": "Completed",
-      "sublabel": "result set",
-      "lane": "main",
-      "col": 4,
-      "tag": "done"
+      "sublabel": "the result text is set",
+      "tag": "done",
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 407,
+          "end_line": 436,
+          "label": "the completion frame"
+        }
+      ]
     },
     {
       "id": "recovering",
       "type": "failure",
       "label": "Recovering",
-      "sublabel": "snapshot",
-      "lane": "faults",
-      "col": 1,
-      "tag": "retryable"
+      "sublabel": "the snapshot is loaded",
+      "tag": "retryable",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/recovery.py",
+          "line": 121,
+          "end_line": 180,
+          "label": "recover"
+        }
+      ]
     },
     {
       "id": "failed",
       "type": "failure",
       "label": "Failed",
-      "sublabel": "budget spent",
-      "lane": "faults",
-      "col": 2,
-      "tag": "terminal"
+      "sublabel": "the retry budget is spent",
+      "tag": "terminal",
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/recovery.py",
+          "line": 99,
+          "end_line": 104,
+          "label": "the attempt budget"
+        }
+      ]
+    },
+    {
+      "id": "cancelled",
+      "type": "failure",
+      "label": "Cancelled",
+      "sublabel": "the operator stopped it",
+      "tag": "terminal",
+      "sources": [
+        {
+          "path": "horizon_broker/scheduler/engine.py",
+          "line": 249,
+          "end_line": 258,
+          "label": "cancel"
+        }
+      ]
     }
   ],
   "transitions": [
@@ -88,30 +178,30 @@
       "id": "t-queued-windowing",
       "from": "queued",
       "to": "windowing",
-      "label": "tier is flex",
-      "labelDy": 55
+      "label": "flex tier",
+      "note": "Flex only."
     },
     {
       "id": "t-windowing-dispatched",
       "from": "windowing",
       "to": "dispatched",
-      "label": "batch ready",
-      "labelDy": 55
+      "label": "ready",
+      "note": "Size or dwell."
     },
     {
       "id": "t-dispatched-running",
       "from": "dispatched",
       "to": "running",
-      "label": "node accepts",
-      "labelDy": 55,
-      "labelDx": 34
+      "label": "accepted",
+      "note": "It starts."
     },
     {
       "id": "t-running-completed",
       "from": "running",
       "to": "completed",
-      "label": "generation done",
-      "labelDy": 55
+      "label": "done",
+      "variant": "emphasis",
+      "note": "Tokens return."
     },
     {
       "id": "t-running-recovering",
@@ -119,77 +209,67 @@
       "to": "recovering",
       "label": "node LOST",
       "variant": "security",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 40
+      "note": "Silence wins."
     },
     {
       "id": "t-recovering-running",
       "from": "recovering",
       "to": "running",
-      "label": "resume from snapshot",
+      "label": "resumed",
       "variant": "emphasis",
-      "fromSide": "left",
-      "toSide": "top",
-      "via": [
-        [
-          470,
-          307
-        ],
-        [
-          470,
-          110
-        ],
-        [
-          556,
-          110
-        ]
-      ],
-      "labelSegment": 2
+      "note": "Direct dispatch."
     },
     {
       "id": "t-recovering-failed",
       "from": "recovering",
       "to": "failed",
-      "label": "attempts exhausted",
+      "label": "spent",
       "variant": "security",
-      "fromSide": "bottom",
-      "toSide": "bottom",
-      "via": [
-        [
-          556,
-          380
-        ],
-        [
-          710,
-          380
-        ]
-      ]
+      "note": "Budget spent."
+    },
+    {
+      "id": "t-dispatched-cancelled",
+      "from": "dispatched",
+      "to": "cancelled",
+      "label": "cancelled",
+      "variant": "security",
+      "note": "Operator stop."
+    },
+    {
+      "id": "t-windowing-failed",
+      "from": "windowing",
+      "to": "failed",
+      "label": "expired",
+      "variant": "security",
+      "note": "Expiry fails."
     }
   ],
   "cards": [
     {
       "dot": "emerald",
-      "title": "Main path",
+      "title": "One rail, five states",
       "items": [
-        "One horizontal rail carries the ordered job states",
-        "Flex work waits in a window before it is dispatched"
+        "The happy path is the rail the reader follows: queued, windowing, dispatched, running, completed",
+        "Only Flex work waits in a window; interactive work is dispatched at once",
+        "The window closes on batch size, dwell, expiry, or an idle fleet"
       ]
     },
     {
       "dot": "amber",
-      "title": "Fault handling",
+      "title": "The fault loop is real topology",
       "items": [
-        "A node loss moves the job into Recovering",
-        "Recovery returns the job to Running with a resume point"
+        "Recovering returns the job to Running with a resume point, not a card saying retry",
+        "The job is re-dispatched directly, never through the shared queue",
+        "The failed node is excluded from the next attempt"
       ]
     },
     {
       "dot": "rose",
-      "title": "Terminal exits",
+      "title": "Two exits end the story",
       "items": [
-        "Failed never points back into active execution",
-        "The retry budget is finite and ends in Failed"
+        "Failed is the retry budget running out; an expiry fails the job too",
+        "Cancelled is the operator stopping the work with DELETE /v1/jobs/{job_id}",
+        "Neither points back into active execution"
       ]
     }
   ]

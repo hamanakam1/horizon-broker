@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "waterfall",
+  "meta": {
+    "title": "Where the recovery time goes",
+    "output": "horizon-broker-recovery-waterfall.html",
+    "quality_profile": "showcase",
+    "evidence": "illustrative",
+    "unit": "ms",
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      { "id": "the-cost", "label": "Where the time goes", "focus": ["detect", "recover"], "note": "Detection dominates: the heartbeat silence window is the whole cost." },
+      { "id": "the-recovery", "label": "The recovery work", "focus": ["load", "validate", "redispatch", "resume"], "note": "The four recovery steps together cost half a second in the design." },
+      { "id": "the-headroom", "label": "The headroom", "focus": ["budget", "resumed"], "note": "The promised budget against the work that is actually left to run." }
+    ]
+  },
+  "layout": {
+    "width": 1200
+  },
+  "spans": [
+    { "id": "failing", "name": "The failing generation", "start": 0, "end": 6000, "status": "error", "service": "edge", "detail": "The node dies mid-generation, so the stream stops without a result.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 190, "end_line": 191, "label": "the node dies" }] },
+    { "id": "recover", "name": "Recover the job", "start": 0, "end": 6500, "status": "ok", "service": "broker", "detail": "Everything the broker does between the failure and the resumed work.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 192, "end_line": 202, "label": "the documented recovery sequence" }] },
+    { "id": "detect", "name": "Detect the node loss", "start": 0, "end": 6000, "parent": "recover", "status": "ok", "service": "broker", "detail": "The watchdog waits out heartbeat.timeout_seconds before it believes the node is gone.", "sources": [{ "path": "docs/RUNBOOK.md", "line": 23, "end_line": 23, "label": "the six second heartbeat timeout" }] },
+    { "id": "load", "name": "Load the newest snapshot", "start": 6000, "end": 6100, "parent": "recover", "status": "ok", "service": "ledger", "detail": "EdgeRecord first, the local journal when the ledger is down.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 195, "end_line": 196, "label": "load the newest snapshot" }] },
+    { "id": "validate", "name": "Validate against the job", "start": 6100, "end": 6200, "parent": "recover", "status": "ok", "service": "broker", "detail": "Prompt hash and model must match, or the job restarts clean.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 197, "end_line": 198, "label": "validate the snapshot" }] },
+    { "id": "redispatch", "name": "Re-dispatch elsewhere", "start": 6200, "end": 6300, "parent": "recover", "status": "ok", "service": "scheduler", "detail": "Directly, never through the shared queue, never onto the node that failed.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 199, "end_line": 199, "label": "re-dispatch" }] },
+    { "id": "resume", "name": "Resume from the decode step", "start": 6300, "end": 6500, "parent": "recover", "status": "ok", "service": "edge", "detail": "The recorded partial tokens are replayed, so finished work is not repeated.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 200, "end_line": 202, "label": "resume from the decode step" }] },
+    { "id": "resumed", "name": "The resumed generation", "start": 6500, "status": "incomplete", "service": "edge", "detail": "The design does not bound the resumed generation, so the span has no recorded end.", "sources": [{ "path": "docs/ARCHITECTURE.md", "line": 202, "end_line": 202, "label": "the recovery budget ends here" }] },
+    { "id": "budget", "name": "The 30 s recovery budget", "start": 0, "end": 30000, "status": "ok", "service": "broker", "detail": "The outer bound the plan promises; the design spends 6.5 s of it.", "sources": [{ "path": "docs/RUNBOOK.md", "line": 169, "end_line": 171, "label": "recovery_budget_seconds" }] }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "These are designed budgets, not a trace", "items": ["The evidence flag is illustrative: no profiler run backs these numbers", "Every duration comes from the documented fault timeline and the shipped defaults", "The bar lengths are the documented design, not a measurement"] },
+    { "dot": "emerald", "title": "Detection is the cost", "items": ["Six of the 6.5 seconds are the heartbeat silence window", "The recovery work itself is five hundred milliseconds in the design", "A shorter heartbeat interval buys back detection time at the cost of chatter"] },
+    { "dot": "cyan", "title": "What the plan still gets wrong", "items": ["The detection budget assumes silence means death, so a transient socket drop fails the job instead", "The quarantine that follows never expires", "Phase 0 of the roadmap closes both"] }
+  ]
+}

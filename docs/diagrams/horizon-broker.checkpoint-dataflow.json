@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "How a checkpoint becomes durable",
+    "output": "horizon-broker-checkpoint-dataflow.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/hamanakam1/horizon-broker",
+      "revision": "76e545fd9e6ed8ce58dc74916f245979154941da",
+      "provider": "github",
+      "link_mode": "web"
+    },
+    "views": [
+      {
+        "id": "write-path",
+        "label": "The write path",
+        "focus": [
+          "supervisor",
+          "checkpoint",
+          "journal",
+          "ledger",
+          "envelope"
+        ],
+        "note": "Journal first, ledger second: the order that keeps a machine-local copy."
+      },
+      {
+        "id": "read-path",
+        "label": "The read path",
+        "focus": [
+          "envelope",
+          "journal",
+          "store",
+          "recovery"
+        ],
+        "note": "Ledger first, journal second: the order that recovers the newest truth."
+      },
+      {
+        "id": "the-whole",
+        "label": "The whole path",
+        "focus": [
+          "supervisor",
+          "checkpoint",
+          "journal",
+          "ledger",
+          "envelope",
+          "store",
+          "recovery"
+        ],
+        "note": "One snapshot, written once and read twice."
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Capture"
+    },
+    {
+      "label": "Persist"
+    },
+    {
+      "label": "Commit"
+    },
+    {
+      "label": "Recover"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "supervisor",
+      "type": "backend",
+      "label": "Supervisor",
+      "sublabel": "runs the generation",
+      "icon": "backend",
+      "stage": 0,
+      "row": 0,
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 192,
+          "end_line": 240,
+          "label": "the supervisor that starts the work"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "cloud",
+      "label": "Ollama engine",
+      "sublabel": "streams the tokens",
+      "brand": "ollama",
+      "stage": 0,
+      "row": 1,
+      "sources": [
+        {
+          "path": "horizon_broker/ollama/client.py",
+          "line": 94,
+          "end_line": 141,
+          "label": "the streaming engine client"
+        }
+      ]
+    },
+    {
+      "id": "checkpoint",
+      "type": "backend",
+      "label": "Checkpoint",
+      "sublabel": "the snapshot",
+      "icon": "active",
+      "stage": 1,
+      "row": 0,
+      "sources": [
+        {
+          "path": "horizon_broker/nodes/executor.py",
+          "line": 328,
+          "end_line": 396,
+          "label": "the checkpoint cadence"
+        }
+      ]
+    },
+    {
+      "id": "journal",
+      "type": "database",
+      "label": "Local journal",
+      "sublabel": "write-ahead, fsynced",
+      "icon": "database",
+      "stage": 1,
+      "row": 1,
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/journal.py",
+          "line": 20,
+          "end_line": 92,
+          "label": "the local write-ahead log"
+        }
+      ]
+    },
+    {
+      "id": "ledger",
+      "type": "database",
+      "label": "EdgeRecord ledger",
+      "sublabel": "the shared truth",
+      "icon": "database",
+      "stage": 2,
+      "row": 0,
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/ledger.py",
+          "line": 36,
+          "end_line": 130,
+          "label": "the EdgeRecord HTTP port"
+        }
+      ]
+    },
+    {
+      "id": "envelope",
+      "type": "database",
+      "label": "Ledger document",
+      "sublabel": "a record with a hash",
+      "stage": 2,
+      "row": 1,
+      "sources": [
+        {
+          "path": "horizon_broker/contracts/ledger.py",
+          "line": 26,
+          "end_line": 62,
+          "label": "LedgerRecord"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "backend",
+      "label": "Snapshot store",
+      "sublabel": "ledger, then journal",
+      "icon": "backend",
+      "stage": 3,
+      "row": 0,
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/snapshot_store.py",
+          "line": 39,
+          "end_line": 120,
+          "label": "the read path"
+        }
+      ]
+    },
+    {
+      "id": "recovery",
+      "type": "backend",
+      "label": "Recovery",
+      "sublabel": "load and re-dispatch",
+      "icon": "backend",
+      "stage": 3,
+      "row": 1,
+      "sources": [
+        {
+          "path": "horizon_broker/recovery/recovery.py",
+          "line": 121,
+          "end_line": 180,
+          "label": "the recovery sequence"
+        }
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "id": "f-engine-supervisor",
+      "from": "engine",
+      "to": "supervisor",
+      "label": "the token stream",
+      "variant": "default",
+      "classification": "tokens"
+    },
+    {
+      "id": "f-supervisor-checkpoint",
+      "from": "supervisor",
+      "to": "checkpoint",
+      "label": "every 64 tokens",
+      "variant": "dashed",
+      "classification": "FaultRecoverySnapshot"
+    },
+    {
+      "id": "f-checkpoint-journal",
+      "from": "checkpoint",
+      "to": "journal",
+      "label": "written first",
+      "variant": "emphasis",
+      "classification": "FaultRecoverySnapshot"
+    },
+    {
+      "id": "f-checkpoint-ledger",
+      "from": "checkpoint",
+      "to": "ledger",
+      "label": "written second",
+      "variant": "security",
+      "classification": "FaultRecoverySnapshot"
+    },
+    {
+      "id": "f-ledger-envelope",
+      "from": "ledger",
+      "to": "envelope",
+      "label": "committed",
+      "variant": "default",
+      "classification": "LedgerRecord"
+    },
+    {
+      "id": "f-envelope-store",
+      "from": "envelope",
+      "to": "store",
+      "label": "read first",
+      "variant": "default",
+      "classification": "FaultRecoverySnapshot"
+    },
+    {
+      "id": "f-journal-store",
+      "from": "journal",
+      "to": "store",
+      "label": "the fallback read",
+      "variant": "default",
+      "classification": "FaultRecoverySnapshot",
+      "labelDy": 19
+    },
+    {
+      "id": "f-store-recovery",
+      "from": "store",
+      "to": "recovery",
+      "label": "the newest",
+      "variant": "emphasis",
+      "classification": "FaultRecoverySnapshot",
+      "labelDy": 25
+    },
+    {
+      "id": "f-recovery-supervisor",
+      "from": "recovery",
+      "to": "supervisor",
+      "label": "re-dispatched",
+      "variant": "default",
+      "classification": "InferenceJob",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          745,
+          350
+        ],
+        [
+          30,
+          350
+        ],
+        [
+          30,
+          157
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Journal first, ledger second",
+      "items": [
+        "The local journal is written before the ledger, so a ledger outage never loses the resume state",
+        "The read order is the mirror image: ledger first, journal second",
+        "A ledger outage degrades durability to machine-local, never to lost"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "One snapshot, two readers",
+      "items": [
+        "The same document is committed as a ledger envelope and read back as a snapshot",
+        "The commit carries the ledger auth token, which is why that flow is marked as policy",
+        "The content hash makes a tampered record detectable, and the prompt hash makes a mismatched snapshot rejectable"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What the plan still leaks",
+      "items": [
+        "The journal rebuild path is never called, so a broker restart loses the queue",
+        "The ledger client is a generic HTTP port rather than a real EdgeRecord adapter",
+        "Phase 1 of the roadmap closes both"
+      ]
+    }
+  ]
+}

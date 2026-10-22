@@ -355,8 +355,13 @@ EDGERECORD_TOKEN=...        # the ledger token, read per request
 
 ### The plan in pictures
 
+**The plan on one page** — the conclusion first, then the phases, the
+comparison and the checklist:
+
+![The plan, on one page](docs/images/explainer-plan.png)
+
 **Target architecture at v1.0** — what is built today (solid) and what the
-scale phase adds (dashed):
+scale phase adds (dashed), with the deployment-ownership profile:
 
 ![Target architecture](docs/images/diagram-target-architecture.png)
 
@@ -371,6 +376,30 @@ scale phase adds (dashed):
 **One job across a node loss**, from acceptance to completion:
 
 ![Node loss sequence](docs/images/diagram-node-loss-sequence.png)
+
+**How a checkpoint becomes durable** — journal first, ledger second:
+
+![Checkpoint dataflow](docs/images/diagram-checkpoint-dataflow.png)
+
+**The documents the broker persists**, with their keys and cardinalities:
+
+![Durable state](docs/images/diagram-state-erd.png)
+
+**The wire-format types** and how they relate:
+
+![Contract types](docs/images/diagram-contract-classes.png)
+
+**The package tree** — every file and what it owns:
+
+![Package tree](docs/images/diagram-package-tree.png)
+
+**When a node loss is detected**, and when the work resumes:
+
+![Recovery budget](docs/images/diagram-fault-timeline.png)
+
+**Where the recovery time goes**, by the documented budgets:
+
+![Recovery timing](docs/images/diagram-recovery-waterfall.png)
 
 Each diagram is generated from a typed specification in `docs/diagrams/`,
 validated to the showcase standard and published to the local dashboard

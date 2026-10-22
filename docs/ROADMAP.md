@@ -278,17 +278,27 @@ current; the compose file still says `0.1.0`.
 
 ## 9. The diagrams
 
-Four diagrams accompany this plan. Each is generated from a typed
-specification in `docs/diagrams/`, validated to the showcase standard (nine
-checks, zero errors, zero warnings) and published to the local dashboard at
+Eleven artifacts accompany this plan, one per Archify diagram type plus the
+one-page explainer. Each is generated from a typed specification in
+`docs/diagrams/`, validated to the showcase standard (nine checks, zero
+errors, zero warnings) and published to the local dashboard at
 `http://127.0.0.1:7878/#archify`.
 
-| Diagram | Type | Artifact | Shows |
+| Artifact | Type | Diagram id | Shows |
 | --- | --- | --- | --- |
-| Target architecture | architecture | `933154eab75945728198234c1b40bc61` | the v1.0 shape: what is built today (solid) and what Phase 2 adds (dashed) |
-| Delivery workflow | workflow | `2c6f56fecbe44a07b74da30541ccee30` | how the software gets built: phase, gate, edge trial, release |
-| Job lifecycle | lifecycle | `eb92809cc4f343ed986e81116ae2036a` | the `InferenceJob` state machine, including the recovery loop and the terminal exits |
-| Node-loss sequence | sequence | `6d4236a2f1ef478cbbc7bd68438d06ee` | one job across a node loss, from acceptance to completion |
+| Target architecture | architecture | `105c7c5594844abc96541e7ad5385f52` | the v1.0 shape: what is built today (solid) and what Phase 2 adds (dashed), with the ownership profile |
+| Delivery workflow | workflow | `a27b46069c2645bfb4d437aff829fd9a` | how the software gets built: phase, gate, edge trial, release |
+| Job lifecycle | lifecycle | `e0587ac0ac874af6afdbc7223da1903d` | the `InferenceJob` state machine, including the recovery loop and the terminal exits |
+| Node-loss sequence | sequence | `fdc0632586b5471c8882b0db68390212` | one job across a node loss, from acceptance to completion |
+| Checkpoint dataflow | dataflow | `95476e56f1be4fa4b970e6d8f1070f27` | how a checkpoint becomes durable: journal first, ledger second |
+| Durable state | erd | `5d09bd154f6145e7bea2cc70a87fe8c7` | the documents the broker persists, with their keys and cardinalities |
+| Contract types | class | `7c1c430ce7c54c4f8c205b49e99547d3` | the wire-format types and how they relate |
+| Package tree | tree | `c3875856ce564c47956e5a8fa1493484` | the forty-one files of the package and what each one owns |
+| Recovery budget | timeline | `7e4f3b1234ef45a18ead63df30d205e3` | when a node loss is detected, and when the work resumes |
+| Recovery timing | waterfall | `794c87e2c6a344f69f660287a4fb1b5e` | where the recovery time goes, by the documented budgets |
+| The plan, on one page | explainer | `b4a07e552f6b420d8627758853dd8f5d` | the conclusion first, then the phases, the comparison and the checklist |
 
 The live artifacts are at `/api/archify/artifacts/<artifact-id>`; the rendered
-screenshots are in `docs/images/`.
+screenshots are in `docs/images/`. Every diagram carries the repository
+identity and per-node source evidence, so the citations resolve to the pinned
+commit rather than to a working tree.
