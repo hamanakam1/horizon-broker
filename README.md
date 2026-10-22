@@ -201,7 +201,11 @@ horizon-broker-cli health
 The CLI talks to a running broker over its HTTP API, so it can be run from
 another machine (`--base-url`).
 
-### In pictures
+### In pictures — captured live
+
+These are the script-free captures: a broker started on this machine, real
+requests over HTTP, the real operator client, and the bytes the tools wrote.
+(The scripted renders above are the reproducible counterpart.)
 
 Every screenshot below was captured from a broker running on this machine
 against a live Ollama engine, with a three-node demo fleet (a prefill node, a
