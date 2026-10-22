@@ -9,6 +9,7 @@ curl -s http://127.0.0.1:8791/healthz     # liveness
 curl -s http://127.0.0.1:8791/readyz      # readiness: at least one healthy node
 curl -s http://127.0.0.1:8791/v1/queue    # queue occupancy and in-flight counters
 curl -s http://127.0.0.1:8791/v1/nodes    # per-node capability, health and load
+curl -s http://127.0.0.1:8791/v1/jobs     # the tracked jobs, newest first
 curl -s http://127.0.0.1:8791/metrics     # Prometheus exposition
 ```
 
@@ -134,16 +135,16 @@ curl -s http://127.0.0.1:8791/v1/queue
 
 ## Restarting the broker
 
-The broker is safe to restart: in-flight jobs are lost (they fail with
-`max attempts exceeded` once the retry budget is spent), but the *queue* is
-recoverable from the journal. Job payloads are journalled on submission, so a
-restarted broker can rebuild the envelope of a job it was running.
+The broker is safe to restart: the *queue* is rebuilt from the journal. Job
+payloads are journalled on submission, and their newest envelope (including
+the terminal states `completed`, `failed` and `cancelled`) is journalled when
+the state changes. On a cold start the broker re-queues every job whose
+newest journalled state is not terminal and whose attempt budget is not
+spent, and counts them in `horizon_jobs_restored_total`.
 
 Snapshots survive in EdgeRecord, which is the point: the ledger is what makes
-recovery survive a broker crash.
-
-`SIGTERM` drains instead of cutting: the ingress stops accepting work
-(`503`), the in-flight jobs are finished (up to
+recovery survive a broker crash. `SIGTERM` drains instead of cutting: the
+ingress stops accepting work (`503`), the in-flight jobs are finished (up to
 `broker.drain_timeout_seconds`, 30 s by default) and only then does the
 process exit. `--no-drain` skips the wait; use it only when the node is
 going away anyway.

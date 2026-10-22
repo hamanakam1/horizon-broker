@@ -75,12 +75,16 @@ class BrokerEngine:
         self.metrics.describe("horizon_jobs_completed_total", "Jobs that finished successfully.")
         self.metrics.describe("horizon_jobs_failed_total", "Jobs that ended in failure.")
         self.metrics.describe("horizon_jobs_recovered_total", "Jobs resumed after a node loss.")
+        self.metrics.describe(
+            "horizon_jobs_restored_total", "Jobs replayed from the journal on a cold start."
+        )
         self.metrics.describe("horizon_flex_batch_size", "Size of the dispatched Flex batches.")
         for metric in (
             "horizon_jobs_submitted_total",
             "horizon_jobs_completed_total",
             "horizon_jobs_failed_total",
             "horizon_jobs_recovered_total",
+            "horizon_jobs_restored_total",
             "horizon_jobs_deferred_total",
             "horizon_jobs_duplicate_total",
             "horizon_flex_batches_total",
@@ -141,6 +145,7 @@ class BrokerEngine:
         self._jobs: dict[str, InferenceJob] = {}
         self._usage: dict[str, tuple[int, int]] = {}
         self._waiters: dict[str, set[asyncio.Future[str | None]]] = {}
+        self._journal_tasks: set[asyncio.Task[None]] = set()
         self._tasks: list[asyncio.Task[None]] = []
         self._ollama_clients: dict[str, OllamaClient] = {}
         self._running = False
@@ -155,6 +160,7 @@ class BrokerEngine:
         if self._running:
             return
         self._running = True
+        restored = await self._replay_journal()
         self._tasks = [
             asyncio.create_task(self._interactive_loop(), name="horizon-interactive"),
             asyncio.create_task(self._flex_loop(), name="horizon-flex"),
@@ -163,9 +169,10 @@ class BrokerEngine:
             asyncio.create_task(self.probe.run(), name="horizon-probe"),
         ]
         LOGGER.info(
-            "horizon broker started: %d static nodes, window=%.0fs",
+            "horizon broker started: %d static nodes, window=%.0fs, %d job(s) replayed",
             len(self.config.static_nodes),
             self.config.window.window_seconds,
+            restored,
         )
 
     async def stop(self, *, drain: bool = True) -> None:
@@ -183,6 +190,12 @@ class BrokerEngine:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        # A cancelled job's terminal envelope is still being written; the
+        # journal must not go dark under a pending commit.
+        pending = [task for task in self._journal_tasks if not task.done()]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._journal_tasks.clear()
         await self.manager.close()
         await self.probe.close()
         await self._close_ollama_clients()
@@ -262,6 +275,7 @@ class BrokerEngine:
         if not cancelled:
             self.queue.remove(job_id)
             job.state = JobState.CANCELLED
+        await self._journal_state(job)
         return True
 
     async def wait_for_result(self, job_id: str, timeout: float | None = None) -> str | None:
@@ -309,6 +323,64 @@ class BrokerEngine:
         for future in futures or ():
             if not future.done():
                 future.set_result(job.result_text)
+        self._record_state_async(job)
+
+    def _record_state_async(self, job: InferenceJob) -> None:
+        """Journal a terminal envelope without blocking the completion callback.
+
+        The callback runs synchronously inside the supervisor; a journal
+        write would have to be awaited from there. A tracked task keeps the
+        write alive until ``stop`` collects it.
+        """
+        try:
+            task = asyncio.create_task(self._journal_state(job))
+        except RuntimeError:  # no running loop; nothing durable to promise
+            return
+        self._journal_tasks.add(task)
+        task.add_done_callback(self._journal_tasks.discard)
+
+    async def _journal_state(self, job: InferenceJob) -> None:
+        """Persist the job envelope so a cold restart sees its newest state."""
+        try:
+            await self.store.store_job_payload(job)
+        except Exception as exc:  # noqa: BLE001 - journalling must not break a finish
+            LOGGER.warning("could not journal job %s state: %s", job.job_id, exc)
+
+    async def _replay_journal(self) -> int:
+        """Re-queue the jobs a previous process left non-terminal.
+
+        The journal is read in write order, so the last envelope per job id
+        is its newest state. A job whose newest record is terminal did its
+        work and stays retired; anything else re-enters the queue and is
+        rejected for good if its attempt budget was already spent.
+        """
+        try:
+            jobs = await self.store.load_jobs()
+        except Exception as exc:  # noqa: BLE001 - a broken journal must not block startup
+            LOGGER.warning("could not read the journal for replay: %s", exc)
+            return 0
+        restored = 0
+        for job in jobs:
+            previous_state = job.state.value
+            if job.state in TERMINAL_STATES:
+                continue
+            if job.attempt >= self.config.recovery.max_attempts:
+                job.state = JobState.FAILED
+                job.error = "recovery attempts exhausted before the restart"
+                continue
+            job.state = JobState.QUEUED
+            job.not_before = None
+            job.assigned_node_id = None
+            self._jobs[job.job_id] = job
+            self.queue.submit(job)
+            restored += 1
+            self.metrics.incr("horizon_jobs_restored_total")
+            LOGGER.info(
+                "replayed job %s into the queue (journalled state was %s)",
+                job.job_id,
+                previous_state,
+            )
+        return restored
 
     def token_usage(self, job_id: str) -> tuple[int, int] | None:
         """The measured (prompt, completion) token counts of a finished job."""

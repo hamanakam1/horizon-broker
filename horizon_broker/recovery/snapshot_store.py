@@ -19,6 +19,7 @@ what makes it survive a *broker* outage.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from horizon_broker.config import LedgerConfig
 from horizon_broker.contracts.errors import LedgerUnavailableError
@@ -132,6 +133,29 @@ class SnapshotStore:
             {"job_id": job.job_id, "job": job.model_dump(mode="json")},
         )
         await self._maybe_trim()
+
+    async def load_jobs(self) -> list[InferenceJob]:
+        """Rebuild every journalled job envelope, deduped to the newest record.
+
+        The journal is read in write order, so the last record of a job id
+        carries its newest state: a job whose newest record is terminal did
+        its work and is not resurrected by a restart.
+        """
+        newest: dict[str, dict[str, Any]] = {}
+        for record in await self.journal.read_all(JOB_KIND):
+            job_id = record.get("job_id")
+            if isinstance(job_id, str):
+                newest[job_id] = record
+        jobs: list[InferenceJob] = []
+        for record in newest.values():
+            body = record.get("job")
+            if not isinstance(body, dict):
+                continue
+            try:
+                jobs.append(InferenceJob.model_validate(body))
+            except Exception as exc:  # noqa: BLE001 - a corrupt line must not block a replay
+                LOGGER.warning("ignoring corrupt journal payload: %s", exc)
+        return jobs
 
     async def load_job_payload(self, job_id: str) -> InferenceJob | None:
         """Rebuild a job envelope from the journal."""

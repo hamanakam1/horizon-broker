@@ -501,6 +501,7 @@ class JobSupervisor:
             if self._recover is None:
                 job.state = JobState.FAILED
                 job.error = f"node {node_id} lost and no recovery coordinator is configured"
+                self._notify_finished(job)
                 continue
             try:
                 await self._recover(job, node_id, reason)
@@ -508,6 +509,7 @@ class JobSupervisor:
                 LOGGER.exception("recovery failed for job %s: %s", job.job_id, exc)
                 job.state = JobState.FAILED
                 job.error = str(exc)
+                self._notify_finished(job)
 
     async def cancel(self, job_id: str) -> bool:
         """Cancel a running job."""
