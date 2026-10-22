@@ -33,6 +33,7 @@ dev = [
     "mypy>=1.8",
     "ruff>=0.3",
     "types-PyYAML>=6.0",
+    "pillow>=10",
 ]
 
 [project.urls]

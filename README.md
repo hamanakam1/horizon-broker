@@ -32,6 +32,25 @@ does not lose an agent's work.
                                              └──────────────┘
 ```
 
+## What it looks like
+
+Both screenshots below are real output, captured by
+[`scripts/make_screenshots.py`](scripts/make_screenshots.py) — the script starts
+the real broker, talks to it over HTTP with the real operator client, and
+paints the bytes the tools wrote. Nothing is hand-drawn.
+
+The broker comes up, reports its health, and lists the fleet it can dispatch
+to — each node with its role, its batch slot, its power headroom and the
+models it serves:
+
+![horizon-broker starting up, its health, and the node fleet](docs/screenshots/fleet.png)
+
+A Flex-tier job is submitted and held in the window instead of being executed
+immediately. That is the whole point: the broker is deliberately slow when
+throughput matters more than latency.
+
+![horizon-broker job submit and job list, showing a flex job waiting in the window](docs/screenshots/queue.png)
+
 ## Why
 
 95 % of planned agent workloads are *long-horizon*: a recursive codebase scan,
