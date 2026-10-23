@@ -60,7 +60,7 @@ class NodeSelector:
         for node in nodes:
             if node.node_id in excluded:
                 continue
-            if node.health in (NodeHealth.LOST, NodeHealth.OFFLINE):
+            if node.health in (NodeHealth.LOST, NodeHealth.OFFLINE, NodeHealth.DRAINING):
                 continue
             # The quarantine is a cooling-off period: once it has expired the
             # node is part of the fleet again.
