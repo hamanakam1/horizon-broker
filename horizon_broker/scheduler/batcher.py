@@ -49,13 +49,22 @@ class BatchPlanner:
     ) -> list[DispatchBatch]:
         """Route every job and group the ones that share a destination node."""
         grouped: dict[str, tuple[list[InferenceJob], list[RoutingDecision]]] = {}
+        projected = {node.node_id: node for node in nodes}
         for job in jobs:
             job_excluded = excluded | (excluded_by_job or {}).get(job.job_id, frozenset())
             try:
-                decision = self.router.route(job, nodes, excluded=job_excluded)
+                decision = self.router.route(job, list(projected.values()), excluded=job_excluded)
             except Exception:
                 # Unroutable jobs stay in the queue; the engine reports them.
                 continue
+            # Each planned start consumes a primary slot. Keep the real fleet
+            # untouched; dispatch will check its live state before admission.
+            node = projected[decision.primary_node_id]
+            projected[node.node_id] = node.model_copy(
+                update={
+                    "current_batch_size": max(node.current_batch_size, len(node.assigned_job_ids)) + 1
+                }
+            )
             bucket = grouped.setdefault(decision.primary_node_id, ([], []))
             bucket[0].append(job)
             bucket[1].append(decision)

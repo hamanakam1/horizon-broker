@@ -50,8 +50,11 @@ class Dispatcher:
         *,
         excluded: frozenset[str] = frozenset(),
     ) -> RoutingDecision:
-        """Route (if needed) and start ``job``."""
-        chosen = decision or self.route(job, excluded=excluded)
+        """Refresh placement so earlier plans cannot overbook the live fleet."""
+        effective_excluded = excluded | (decision.excluded if decision else frozenset())
+        chosen = self.route(job, excluded=effective_excluded)
+        # There is no await between routing and the supervisor's reservation.
+        # Another dispatch therefore sees this job's occupied primary slot.
         LOGGER.info(
             "dispatching job %s (%s) to node %s: %s",
             job.job_id,

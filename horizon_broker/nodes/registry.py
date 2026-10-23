@@ -27,11 +27,23 @@ class NodeRegistry:
     # -- registration -------------------------------------------------------
 
     def upsert(self, capability: NodeCapability) -> NodeCapability:
-        """Register or update a node, preserving the last heartbeat when unset."""
+        """Update telemetry without replacing existing broker-owned assignments.
+
+        Full heartbeat payloads may omit job IDs. Only assignment and release
+        operations may change the broker's ownership of an existing node's jobs.
+        """
         existing = self._nodes.get(capability.node_id)
-        if existing is not None and capability.last_heartbeat_at is None:
+        if existing is not None:
             capability = capability.model_copy(
-                update={"last_heartbeat_at": existing.last_heartbeat_at}
+                update={
+                    "assigned_job_ids": existing.assigned_job_ids,
+                    "last_heartbeat_at": capability.last_heartbeat_at or existing.last_heartbeat_at,
+                }
+            )
+        # Telemetry can lag assignment; known active jobs still occupy slots.
+        if capability.current_batch_size < len(capability.assigned_job_ids):
+            capability = capability.model_copy(
+                update={"current_batch_size": len(capability.assigned_job_ids)}
             )
         self._nodes[capability.node_id] = capability
         self._registered_at.setdefault(capability.node_id, utcnow())
@@ -109,18 +121,21 @@ class NodeRegistry:
         self._nodes[node_id] = node.model_copy(
             update={
                 "assigned_job_ids": assigned,
-                "current_batch_size": max(node.current_batch_size, len(assigned)),
+                "current_batch_size": max(node.current_batch_size + 1, len(assigned)),
             }
         )
 
     def release_job(self, node_id: str, job_id: str) -> None:
         """Detach a job from a node."""
         node = self._nodes.get(node_id)
-        if node is None:
+        if node is None or job_id not in node.assigned_job_ids:
             return
         assigned = tuple(item for item in node.assigned_job_ids if item != job_id)
         self._nodes[node_id] = node.model_copy(
-            update={"assigned_job_ids": assigned, "current_batch_size": len(assigned)}
+            update={
+                "assigned_job_ids": assigned,
+                "current_batch_size": max(len(assigned), node.current_batch_size - 1),
+            }
         )
 
     def jobs_on(self, node_id: str) -> tuple[str, ...]:
