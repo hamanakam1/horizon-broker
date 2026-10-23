@@ -282,6 +282,17 @@ class JobSupervisor:
                 return
         if context is None:
             return
+        if event.node_id != context.node_id:
+            # Frames may arrive after recovery or a prefill/decode handoff.
+            # Only the current owner may update the replacement execution.
+            LOGGER.warning(
+                "ignoring %s frame for job %s from node %s: current owner is %s",
+                event.type.value,
+                context.job.job_id,
+                event.node_id,
+                context.node_id,
+            )
+            return
 
         if event.type is NodeEventType.PROGRESS:
             context.job.state = JobState.RUNNING
