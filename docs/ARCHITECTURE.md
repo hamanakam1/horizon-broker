@@ -161,7 +161,15 @@ consumes it. Two degradations are explicit rather than silent:
   before it starts and the job runs whole on the prefill node
   (`horizon_splits_degraded_total`);
 * a prefill node that finishes without a reference re-runs the job whole on
-  the decode node instead of failing the work.
+  the decode node, provided that node remains eligible.
+
+An executable split reserves one slot on each node before sending prefill.
+The prefill slot is released at handoff, and completion, failure, cancellation,
+or recovery releases the remaining slots. Heartbeats cannot erase a future
+decode reservation. The decoder is checked again at handoff: if it has become
+unavailable, the job fails and both reservations are released. Losing the
+future decoder does not restart the healthy prefill phase; this path does not
+automatically choose another decoder or recover a completed prefill phase.
 
 ## Lifecycle guarantees
 
@@ -178,11 +186,13 @@ already known. A caller that retries after a timeout cannot double-execute.
 **Backpressure.** Above `scheduling.max_queue_depth` the ingress answers
 `429` instead of accepting work the fleet cannot absorb.
 
-**Primary-node capacity.** Flex planning accounts for each planned primary slot
+**Node capacity.** Flex planning accounts for each planned primary slot
 without changing the live registry. Dispatch refreshes placement immediately
-before assignment, so a stale plan cannot overbook a primary node. Overflow is
-deferred in the queue. Heartbeat updates preserve broker-owned assignments, and
-releasing one job does not erase other reported load.
+before assignment, and executable splits reserve both phase slots together.
+Overflow is deferred in the queue. Heartbeat updates preserve broker-owned
+assignments and add pending phase reservations to reported running occupancy;
+agent assignments stay pending until their transport succeeds. Releasing one
+job does not erase other reported load.
 New and recovered placements exclude draining nodes in both scheduling lanes;
 that filter does not itself cancel work the node has already accepted.
 
@@ -296,7 +306,11 @@ The interactive version of this map is published to the dashboard
   story needs a leader election and a shared queue, which is out of scope
   here.
 * Direct Ollama nodes cannot export a KV cache. Executable split handoff requires
-  agent containers on both nodes. A split reserves only its current primary
-  phase; capacity for the future decode handoff is not reserved or revalidated.
+  agent containers on both nodes. Both slots are reserved before prefill starts,
+  but a decoder that becomes unavailable causes a terminal failure at handoff;
+  recovery from a completed prefill phase is not supported.
+* Nodes do not acknowledge when a sent assignment appears in running-load
+  telemetry. After a successful send, admission still depends on that report;
+  delayed telemetry that mixes broker jobs and external work can understate load.
 * The broker assumes it is the only writer for a given job id. Job ids are
   UUIDs, so collisions are not a practical concern.

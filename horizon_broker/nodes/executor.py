@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from horizon_broker.config import RecoveryConfig
+from horizon_broker.contracts.errors import NoCapacityError
 from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState
 from horizon_broker.contracts.nodes import ExecutionMode, NodeCapability, NodeHealth
 from horizon_broker.contracts.recovery import FaultRecoverySnapshot, PartialToken, ResumePoint
@@ -74,6 +75,8 @@ class ExecutionContext:
     kv_cache_state_id: str | None = None
     chunks: list[str] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
+    reserved_node_ids: set[str] = field(default_factory=set)
+    """Future decode capacity belongs to this execution until handoff or cleanup."""
 
     @property
     def text(self) -> str:
@@ -128,6 +131,16 @@ class JobSupervisor:
         node = self.registry.get(decision.primary_node_id)
         if node is None:
             raise KeyError(f"node {decision.primary_node_id} is not registered")
+        executable_split = decision.is_split and self._split_is_executable(decision)
+        reserved_node_ids = {node.node_id}
+        if executable_split:
+            assert decision.prefill_node_id is not None and decision.decode_node_id is not None
+            reserved_node_ids = {decision.prefill_node_id, decision.decode_node_id}
+        # Validate the entire allocation before changing either the job or the
+        # registry. There is no await until every phase has its capacity reserved.
+        for node_id in reserved_node_ids:
+            if node_id in decision.excluded or not self._node_available(node_id, job):
+                raise NoCapacityError(f"node {node_id} cannot reserve capacity for job {job.job_id}")
         context = ExecutionContext(
             job=job,
             decision=decision,
@@ -135,12 +148,15 @@ class JobSupervisor:
             started_at=self._clock(),
             attempt=job.attempt,
             kv_cache_state_id=job.kv_cache_state_id,
+            reserved_node_ids=reserved_node_ids,
         )
+        for node_id in reserved_node_ids:
+            self.registry.reserve_job(node_id, job.job_id)
         self._contexts[job.job_id] = context
         job.state = JobState.DISPATCHED
         job.assigned_node_id = node.node_id
 
-        if decision.is_split and self._split_is_executable(decision):
+        if executable_split:
             context.phase = ExecutionPhase.PREFILL
             job.phase = ExecutionPhase.PREFILL
             prefill_node_id = decision.prefill_node_id or decision.primary_node_id
@@ -159,6 +175,32 @@ class JobSupervisor:
         job.phase = ExecutionPhase.MONOLITHIC
         await self._start_phase(context, node.node_id, ExecutionPhase.MONOLITHIC)
         return context
+
+    def _node_available(
+        self, node_id: str, job: InferenceJob, *, reserved: bool = False,
+    ) -> bool:
+        """A reserved phase may use its own slot, but not an unavailable node."""
+        node = self.registry.get(node_id)
+        if (
+            node is None
+            or node.health in (NodeHealth.LOST, NodeHealth.OFFLINE, NodeHealth.DRAINING)
+            or self.registry.is_quarantined(node_id)
+            or not node.supports_model(job.payload.model)
+        ):
+            return False
+        if reserved:
+            return (
+                job.job_id in node.assigned_job_ids
+                and node.current_batch_size <= node.max_batch_size
+            )
+        return node.batch_headroom > 0
+
+    def _release_reservations(self, context: ExecutionContext, node_id: str | None = None) -> None:
+        """Release only slots still owned by this execution, at most once."""
+        releasing = context.reserved_node_ids.copy() if node_id is None else {node_id}
+        for reserved_id in releasing & context.reserved_node_ids:
+            self.registry.release_job(reserved_id, context.job.job_id)
+            context.reserved_node_ids.remove(reserved_id)
 
     def _split_is_executable(self, decision: RoutingDecision) -> bool:
         """True when the split can actually run.
@@ -191,7 +233,6 @@ class JobSupervisor:
         context.phase = phase
         context.job.phase = phase
         context.job.assigned_node_id = node_id
-        self.registry.assign_job(node_id, context.job.job_id)
 
         try:
             if node.execution_mode is ExecutionMode.AGENT_CONTAINER:
@@ -211,7 +252,17 @@ class JobSupervisor:
                         "kv_cache_state_id": context.kv_cache_state_id,
                     },
                 )
+                # A send can suspend while telemetry still reports only earlier
+                # work. Keep its slot pending until transport succeeds, and do
+                # not reactivate a phase that changed ownership during the send.
+                if (
+                    self._contexts.get(context.job.job_id) is context
+                    and context.node_id == node_id
+                    and context.phase is phase
+                ):
+                    self.registry.assign_job(node_id, context.job.job_id)
             else:
+                self.registry.assign_job(node_id, context.job.job_id)
                 context.task = asyncio.create_task(self._run_ollama(context, node))
         except Exception:
             if (
@@ -224,7 +275,7 @@ class JobSupervisor:
                 return
             # Failed startup must not retain a phantom owner that accepts late
             # events or consumes a slot. Cancellation keeps its existing semantics.
-            self.registry.release_job(node_id, context.job.job_id)
+            self._release_reservations(context)
             self._contexts.pop(context.job.job_id, None)
             raise
 
@@ -381,7 +432,9 @@ class JobSupervisor:
         if isinstance(headroom, (int, float)):
             updates["power_headroom"] = float(headroom)
         if updates:
-            self.registry.upsert(node.model_copy(update=updates))
+            self.registry.upsert(
+                node.model_copy(update=updates), occupancy_reported="current_batch_size" in updates,
+            )
 
     # -- checkpoints --------------------------------------------------------
 
@@ -464,6 +517,19 @@ class JobSupervisor:
         """
         decision = context.decision
         decode_node_id = decision.decode_node_id
+        decode_node = self.registry.get(decode_node_id) if decode_node_id else None
+        if (
+            decode_node_id is None
+            or decode_node_id not in context.reserved_node_ids
+            or decode_node is None
+            or decode_node.execution_mode is not ExecutionMode.AGENT_CONTAINER
+            or not self._node_available(decode_node_id, context.job, reserved=True)
+        ):
+            # Losing a future decoder does not restart a healthy prefill phase.
+            # Once prefill finishes, an unusable decoder is a terminal handoff
+            # failure; retaining either reservation would strand other work.
+            await self._fail(context, f"reserved decode node {decode_node_id} is unavailable")
+            return
         kv_ref = data.get("kv_cache_ref") or data.get("kv_cache_state_id")
         if not isinstance(kv_ref, str) or not kv_ref:
             LOGGER.error(
@@ -472,20 +538,16 @@ class JobSupervisor:
                 context.job.job_id,
             )
             self.metrics.incr("horizon_splits_degraded_total")
-            if decode_node_id is None:
-                await self._fail(context, "prefill phase produced no KV cache reference")
-                return
-            self.registry.release_job(context.node_id, context.job.job_id)
+            if context.node_id != decode_node_id:
+                self._release_reservations(context, context.node_id)
             context.chunks = []
             await self._start_phase(context, decode_node_id, ExecutionPhase.MONOLITHIC)
             return
 
         context.kv_cache_state_id = kv_ref
         context.job.kv_cache_state_id = kv_ref
-        self.registry.release_job(context.node_id, context.job.job_id)
-        if decode_node_id is None:
-            await self._fail(context, "split decision has no decode node")
-            return
+        if context.node_id != decode_node_id:
+            self._release_reservations(context, context.node_id)
         LOGGER.info(
             "job %s: prefill on %s produced %s, handing over to %s",
             context.job.job_id,
@@ -503,7 +565,7 @@ class JobSupervisor:
         job.state = JobState.COMPLETED
         job.result_text = text
         job.error = None
-        self.registry.release_job(context.node_id, job.job_id)
+        self._release_reservations(context)
         if self._contexts.get(job.job_id) is context:
             self._contexts.pop(job.job_id, None)
         usage = self._record_usage(job.job_id, context)
@@ -528,7 +590,7 @@ class JobSupervisor:
         job = context.job
         job.state = JobState.FAILED
         job.error = message
-        self.registry.release_job(context.node_id, job.job_id)
+        self._release_reservations(context)
         if self._contexts.get(job.job_id) is context:
             self._contexts.pop(job.job_id, None)
         self._notify_finished(job)
@@ -564,7 +626,7 @@ class JobSupervisor:
             job.state = JobState.RECOVERING
             if context.task is not None:
                 context.task.cancel()
-            self.registry.release_job(node_id, job.job_id)
+            self._release_reservations(context)
             if self._contexts.get(job.job_id) is context:
                 self._contexts.pop(job.job_id, None)
             if self._recover is None:
@@ -602,7 +664,7 @@ class JobSupervisor:
             except Exception as exc:  # noqa: BLE001 - the local state is cancelled anyway
                 LOGGER.warning("could not send cancel frame to node %s: %s", node.node_id, exc)
         context.job.state = JobState.CANCELLED
-        self.registry.release_job(context.node_id, job_id)
+        self._release_reservations(context)
         if self._contexts.get(job_id) is context:
             self._contexts.pop(job_id, None)
         return True

@@ -23,14 +23,20 @@ class NodeRegistry:
     def __init__(self) -> None:
         self._nodes: dict[str, NodeCapability] = {}
         self._registered_at: dict[str, datetime] = {}
+        self._pending_job_ids: dict[str, set[str]] = {}
 
     # -- registration -------------------------------------------------------
 
-    def upsert(self, capability: NodeCapability) -> NodeCapability:
+    def upsert(
+        self, capability: NodeCapability, *, occupancy_reported: bool = True,
+    ) -> NodeCapability:
         """Update telemetry without replacing existing broker-owned assignments.
 
         Full heartbeat payloads may omit job IDs. Only assignment and release
         operations may change the broker's ownership of an existing node's jobs.
+        Reported running occupancy excludes reserved future phases; add those
+        slots separately. Partial updates without occupancy already carry the
+        registry's combined count and must pass ``occupancy_reported=False``.
         """
         existing = self._nodes.get(capability.node_id)
         if existing is not None:
@@ -40,10 +46,15 @@ class NodeRegistry:
                     "last_heartbeat_at": capability.last_heartbeat_at or existing.last_heartbeat_at,
                 }
             )
-        # Telemetry can lag assignment; known active jobs still occupy slots.
-        if capability.current_batch_size < len(capability.assigned_job_ids):
+        occupancy = capability.current_batch_size
+        if occupancy_reported:
+            occupancy += len(self._pending_job_ids.get(capability.node_id, ()))
+        # Telemetry can lag assignment; known jobs still occupy slots, while
+        # future phases also occupy slots alongside any reported external work.
+        occupancy = max(occupancy, len(capability.assigned_job_ids))
+        if capability.current_batch_size != occupancy:
             capability = capability.model_copy(
-                update={"current_batch_size": len(capability.assigned_job_ids)}
+                update={"current_batch_size": occupancy}
             )
         self._nodes[capability.node_id] = capability
         self._registered_at.setdefault(capability.node_id, utcnow())
@@ -53,6 +64,7 @@ class NodeRegistry:
         """Forget a node entirely."""
         self._nodes.pop(node_id, None)
         self._registered_at.pop(node_id, None)
+        self._pending_job_ids.pop(node_id, None)
 
     def get(self, node_id: str) -> NodeCapability | None:
         return self._nodes.get(node_id)
@@ -110,11 +122,27 @@ class NodeRegistry:
 
     # -- work accounting ----------------------------------------------------
 
+    def reserve_job(self, node_id: str, job_id: str) -> None:
+        """Keep a future phase's slot separate from node-reported running work."""
+        node = self._nodes.get(node_id)
+        if node is None or job_id in node.assigned_job_ids:
+            return
+        self.assign_job(node_id, job_id)
+        self._pending_job_ids.setdefault(node_id, set()).add(job_id)
+
+    def _clear_pending(self, node_id: str, job_id: str) -> None:
+        pending = self._pending_job_ids.get(node_id)
+        if pending is not None:
+            pending.discard(job_id)
+            if not pending:
+                self._pending_job_ids.pop(node_id, None)
+
     def assign_job(self, node_id: str, job_id: str) -> None:
-        """Attach a job to a node."""
+        """Activate work without charging a previously reserved slot twice."""
         node = self._nodes.get(node_id)
         if node is None:
             return
+        self._clear_pending(node_id, job_id)
         if job_id in node.assigned_job_ids:
             return
         assigned = node.assigned_job_ids + (job_id,)
@@ -127,6 +155,7 @@ class NodeRegistry:
 
     def release_job(self, node_id: str, job_id: str) -> None:
         """Detach a job from a node."""
+        self._clear_pending(node_id, job_id)
         node = self._nodes.get(node_id)
         if node is None or job_id not in node.assigned_job_ids:
             return
