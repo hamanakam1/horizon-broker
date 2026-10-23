@@ -138,9 +138,9 @@ decode_bytes   = (2 * P / batch) * N + kv_bytes * N
 
 The split mode requires the engine to support KV-cache hand-off
 (`routing.kv_handoff_models`). The contract carries `kv_cache_state_id` and
-`InferenceJob.phase` for exactly this, but Ollama does not expose a KV-cache
-export endpoint yet — so the split is currently negotiated but not executed.
-The direct modes are fully live.
+`InferenceJob.phase` for this purpose. Agent containers with KV export can
+execute the two phases. Direct Ollama endpoints do not expose a KV-cache export
+endpoint, so a split involving one runs as a whole job on its primary node.
 
 ### The two-phase split, end to end
 
@@ -183,6 +183,8 @@ without changing the live registry. Dispatch refreshes placement immediately
 before assignment, so a stale plan cannot overbook a primary node. Overflow is
 deferred in the queue. Heartbeat updates preserve broker-owned assignments, and
 releasing one job does not erase other reported load.
+New and recovered placements exclude draining nodes in both scheduling lanes;
+that filter does not itself cancel work the node has already accepted.
 
 **Execution startup failures.** A failed agent assignment, decode handoff, or
 Ollama client setup reaches callers as a terminal failure and releases local
