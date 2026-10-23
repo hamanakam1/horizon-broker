@@ -775,38 +775,26 @@ class BrokerEngine:
 
     async def _run_flex(self, batch: FlexBatch) -> None:
         try:
-            plans = self.planner.plan(list(batch.jobs), self.registry.all())
+            plans = self.planner.plan(
+                list(batch.jobs),
+                self.registry.all(),
+                excluded_by_job={
+                    job.job_id: self.recovery.avoided_nodes(job.job_id) for job in batch.jobs
+                },
+            )
+            planned_ids = {job.job_id for plan in plans for job in plan.jobs}
+            # Planning removes jobs from the queue before routing. A partially
+            # routable batch must return every omitted member, not lose it.
+            for job in batch.jobs:
+                if job.job_id not in planned_ids:
+                    self._defer(job, reason="unroutable")
             if not plans:
                 LOGGER.warning(
                     "flex batch %s could not be routed; returning %d jobs to the queue",
                     batch.model,
                     batch.size,
                 )
-                for job in batch.jobs:
-                    first_deferral = not any(
-                        tag in {"recovered:no-capacity", "recovered:unroutable"}
-                        for tag in job.tags
-                    )
-                    job.not_before = utcnow() + timedelta(seconds=2)
-                    self.queue.requeue_front(job, reason="unroutable")
-                    if first_deferral:
-                        self.metrics.incr("horizon_jobs_deferred_total")
                 return
-            planned_ids = {job.job_id for plan in plans for job in plan.jobs}
-            for job in batch.jobs:
-                if job.job_id not in planned_ids:
-                    # A mixed batch may contain a job that cannot fit any
-                    # currently available node even though its siblings can.
-                    # Preserve it instead of silently losing it with the
-                    # successfully planned subset.
-                    first_deferral = not any(
-                        tag in {"recovered:no-capacity", "recovered:unroutable"}
-                        for tag in job.tags
-                    )
-                    job.not_before = utcnow() + timedelta(seconds=2)
-                    self.queue.requeue_front(job, reason="unroutable")
-                    if first_deferral:
-                        self.metrics.incr("horizon_jobs_deferred_total")
             self.metrics.observe("horizon_flex_batch_size", float(batch.size))
             self.metrics.incr(
                 "horizon_flex_batches_total", reason=batch.reason, model=batch.model
@@ -858,19 +846,13 @@ class BrokerEngine:
     async def _execute(self, job: InferenceJob, decision: Any = None) -> None:
         """Route and start one job."""
         try:
-            if decision is None:
-                decision = self.dispatcher.route(
-                    job,
-                    excluded=self.recovery.avoided_nodes(job.job_id),
-                )
+            excluded = self.recovery.avoided_nodes(job.job_id)
+            if decision is None or excluded - decision.excluded:
+                decision = self.dispatcher.route(job, excluded=excluded)
             await self.dispatcher.dispatch(job, decision)
         except NoCapacityError as exc:
             LOGGER.warning("deferring job %s: %s", job.job_id, exc)
-            job.state = JobState.QUEUED
-            job.phase = ExecutionPhase.MONOLITHIC
-            job.not_before = utcnow() + timedelta(seconds=2)
-            self.queue.requeue_front(job, reason="no-capacity")
-            self.metrics.incr("horizon_jobs_deferred_total")
+            self._defer(job, reason="no-capacity")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -881,6 +863,22 @@ class BrokerEngine:
             # the terminal envelope is journalled so a restart does not
             # resurrect the job.
             self._on_job_finished(job)
+
+    def _defer(self, job: InferenceJob, *, reason: str) -> None:
+        """Retain unavailable work without spinning on an unchanged fleet.
+
+        The counter moves on the first deferral of a job: a job that keeps
+        bouncing between nodes is one problem, not many.
+        """
+        first_deferral = not any(
+            tag in {"recovered:no-capacity", "recovered:unroutable"} for tag in job.tags
+        )
+        job.state = JobState.QUEUED
+        job.phase = ExecutionPhase.MONOLITHIC
+        job.not_before = utcnow() + timedelta(seconds=2)
+        self.queue.requeue_front(job, reason=reason)
+        if first_deferral:
+            self.metrics.incr("horizon_jobs_deferred_total")
 
     # -- recovery hooks -----------------------------------------------------
 
