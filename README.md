@@ -21,8 +21,9 @@
 
 The Horizon Broker intercepts every request bound for the local Ollama/Qwen
 endpoints and stops treating inference as a blocking call. It routes
-long-horizon work, batches it for throughput, and guarantees that a dead node
-does not lose an agent's work.
+long-horizon work into Flex windows, sends real batch admissions only to
+opt-in agent containers, and keeps direct Ollama execution one request per
+prompt while guaranteeing that a dead node does not lose an agent's work.
 
 ```text
    agent ──POST /v1/jobs──▶ ┌───────────────┐   flex window    ┌──────────────┐
@@ -274,6 +275,13 @@ decode node and a solar trailer) pointed at the local engine.
 
 ![Prometheus metrics](docs/images/terminal-metrics.png)
 
+For durability monitoring, alert on `horizon_ledger_fallback_total`: its
+`commit`, `query` and `invalid` reasons distinguish journal-only writes,
+ledger read outages and rejected recovery records.
+
+Alert on `horizon_journal_replay_failures_total` when a broker starts without
+being able to read its local recovery journal.
+
 <details>
 <summary><strong>The AI City in ASCII</strong> — 300 columns, 44 rows</summary>
 
@@ -339,6 +347,7 @@ documents every knob. Environment variables override the file:
 HORIZON_BROKER_PORT=8791
 HORIZON_BROKER_OLLAMA_BASE_URL=http://127.0.0.1:11434
 HORIZON_BROKER_LEDGER_BASE_URL=http://127.0.0.1:8787
+HORIZON_BROKER_LEDGER_OWNER_ID=broker-a
 HORIZON_BROKER_WINDOW_SECONDS=45
 HORIZON_BROKER_RECOVERY_BUDGET=30
 HORIZON_BROKER_MAX_QUEUE_DEPTH=10000
@@ -413,6 +422,7 @@ make dev
 make test        # pytest
 make lint        # ruff
 make typecheck   # mypy --strict
+make doctor      # report missing validation tools and typing stubs
 make check       # lint + typecheck + schema drift (the pre-proposal gate)
 make schemas     # regenerate schemas/*.v1.json
 ```
@@ -420,7 +430,7 @@ make schemas     # regenerate schemas/*.v1.json
 ## Status
 
 **v0.2.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests (141 of them). The
+recovery paths are implemented and covered by tests (700 of them). The
 prefill/decode split runs end to end for engines that can export a KV cache
 (enable them in `routing.kv_handoff_models`); Ollama cannot, so the broker
 degrades a split to a whole-job run and says so in the log and the

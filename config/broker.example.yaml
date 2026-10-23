@@ -3,7 +3,8 @@
 # Every value below is a default; anything you omit keeps the built-in
 # default. Environment variables override the file:
 #   HORIZON_BROKER_PORT, HORIZON_BROKER_OLLAMA_BASE_URL,
-#   HORIZON_BROKER_LEDGER_BASE_URL, HORIZON_BROKER_WINDOW_SECONDS, ...
+#   HORIZON_BROKER_LEDGER_BASE_URL, HORIZON_BROKER_LEDGER_OWNER_ID,
+#   HORIZON_BROKER_WINDOW_SECONDS, ...
 
 broker:
   host: 127.0.0.1
@@ -63,6 +64,8 @@ ledger:
   enabled: true
   base_url: http://127.0.0.1:8787
   collection: horizon_broker.snapshots
+  # Must be unique per broker when multiple brokers share an EdgeRecord ledger.
+  owner_id: horizon-broker
   timeout_seconds: 5.0
   # Transient failures (network errors, 5xx) are retried with a growing
   # backoff; a 4xx is permanent and fails immediately.

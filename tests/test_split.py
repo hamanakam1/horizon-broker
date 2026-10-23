@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from horizon_broker.config import RoutingConfig
 from horizon_broker.contracts.jobs import ExecutionPhase, JobState
 from horizon_broker.contracts.nodes import ExecutionMode, NodeRole
@@ -89,6 +91,51 @@ async def test_a_split_job_prefills_on_one_node_and_decodes_on_another(tmp_path)
     assert job.phase is ExecutionPhase.DECODE
 
 
+async def test_failed_split_prefill_releases_the_initial_reservation(tmp_path) -> None:
+    supervisor, registry, _ = build(tmp_path)
+    job = make_job(model=MODEL, prompt_tokens=32_768, output_tokens=4_096)
+    decision = split_decision(job, registry)
+
+    async def reject_prefill(node_id: str, frame: dict[str, Any]) -> None:
+        raise RuntimeError("synthetic prefill assignment failure")
+
+    supervisor._assign = reject_prefill
+    with pytest.raises(RuntimeError, match="prefill assignment failure"):
+        await supervisor.start(job, decision)
+    assert job.state is JobState.QUEUED
+    assert job.phase is ExecutionPhase.MONOLITHIC
+    assert job.assigned_node_id is None
+    assert supervisor.active_jobs() == []
+    assert registry.jobs_on("m3-max") == ()
+    assert registry.jobs_on("pi-decode") == ()
+
+
+async def test_failed_split_decode_handoff_finishes_the_job(tmp_path) -> None:
+    supervisor, registry, frames = build(tmp_path)
+    job = make_job(model=MODEL, prompt_tokens=32_768, output_tokens=4_096)
+    decision = split_decision(job, registry)
+
+    async def reject_decode(node_id: str, frame: dict[str, Any]) -> None:
+        frames.append((node_id, frame))
+        if frame["phase"] == ExecutionPhase.DECODE.value:
+            raise RuntimeError("synthetic decode assignment failure")
+
+    supervisor._assign = reject_decode
+    await supervisor.start(job, decision)
+    await supervisor.handle_event(
+        NodeEvent(
+            node_id="m3-max",
+            type=NodeEventType.COMPLETE,
+            data={"job_id": job.job_id, "kv_cache_ref": "kv-cache-1"},
+        )
+    )
+    assert job.state is JobState.FAILED
+    assert "decode assignment failed" in (job.error or "")
+    assert supervisor.active_jobs() == []
+    assert registry.jobs_on("m3-max") == ()
+    assert registry.jobs_on("pi-decode") == ()
+
+
 async def test_a_frame_without_a_job_id_is_attributed_to_the_only_active_job(tmp_path) -> None:
     supervisor, registry, frames = build(tmp_path)
     job = make_job(model=MODEL, prompt_tokens=32_768, output_tokens=4_096)
@@ -118,6 +165,60 @@ async def test_a_split_without_a_kv_cache_falls_back_to_a_whole_run(tmp_path) ->
     assert frames[1][0] == "pi-decode"
     assert frames[1][1]["phase"] == ExecutionPhase.MONOLITHIC.value
     assert supervisor.metrics.counter("horizon_splits_degraded_total") == 1
+
+
+async def test_failed_degraded_decode_handoff_finishes_the_job(tmp_path) -> None:
+    supervisor, registry, _ = build(tmp_path)
+    job = make_job(model=MODEL, prompt_tokens=32_768, output_tokens=4_096)
+    decision = split_decision(job, registry)
+
+    async def reject_decode(node_id: str, frame: dict[str, Any]) -> None:
+        if frame["phase"] == ExecutionPhase.MONOLITHIC.value:
+            raise RuntimeError("synthetic degraded assignment failure")
+
+    supervisor._assign = reject_decode
+    await supervisor.start(job, decision)
+    await supervisor.handle_event(
+        NodeEvent(node_id="m3-max", type=NodeEventType.COMPLETE, data={})
+    )
+    assert job.state is JobState.FAILED
+    assert "degraded decode assignment failed" in (job.error or "")
+    assert supervisor.active_jobs() == []
+    assert registry.jobs_on("m3-max") == ()
+    assert registry.jobs_on("pi-decode") == ()
+
+
+async def test_decode_rollback_preserves_a_synchronous_completion(tmp_path) -> None:
+    supervisor, registry, _ = build(tmp_path)
+    job = make_job(model=MODEL, prompt_tokens=32_768, output_tokens=4_096)
+    decision = split_decision(job, registry)
+
+    async def complete_then_reject(node_id: str, frame: dict[str, Any]) -> None:
+        if frame["phase"] == ExecutionPhase.DECODE.value:
+            await supervisor.handle_event(
+                NodeEvent(
+                    node_id=node_id,
+                    type=NodeEventType.COMPLETE,
+                    data={"job_id": job.job_id, "text": "completed-at-decode"},
+                )
+            )
+            raise RuntimeError("synthetic decode acknowledgement contradiction")
+
+    supervisor._assign = complete_then_reject
+    await supervisor.start(job, decision)
+    await supervisor.handle_event(
+        NodeEvent(
+            node_id="m3-max",
+            type=NodeEventType.COMPLETE,
+            data={"job_id": job.job_id, "kv_cache_ref": "kv-cache-2"},
+        )
+    )
+
+    assert job.state is JobState.COMPLETED
+    assert job.result_text == "completed-at-decode"
+    assert supervisor.active_jobs() == []
+    assert registry.jobs_on("m3-max") == ()
+    assert registry.jobs_on("pi-decode") == ()
 
 
 async def test_a_direct_ollama_node_cannot_run_a_split(tmp_path) -> None:

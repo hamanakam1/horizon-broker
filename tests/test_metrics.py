@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from horizon_broker.observability.metrics import MetricsRegistry
 
 
@@ -48,3 +52,12 @@ def test_the_counter_sums_every_label_combination() -> None:
     registry.incr("horizon_jobs_submitted_total", tier="interactive")
     assert registry.counter("horizon_jobs_submitted_total") == 3.0
     assert registry.counter("horizon_jobs_submitted_total", tier="flex") == 2.0
+
+
+@pytest.mark.parametrize("method", ["declare", "incr", "set_gauge", "observe"])
+@pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf, 10**1000, True, False])
+def test_metric_recording_rejects_non_finite_values(method: str, value: float) -> None:
+    registry = MetricsRegistry()
+
+    with pytest.raises(ValueError, match="finite"):
+        getattr(registry, method)("horizon_invalid", value)

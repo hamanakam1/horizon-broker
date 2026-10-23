@@ -57,6 +57,7 @@ class NodeConnectionManager:
         would leak one socket pool per reconnect.
         """
         session = await self._get_session()
+        self._reap_finished_tasks()
         wanted = {
             node.node_id
             for node in self.registry.all()
@@ -66,10 +67,12 @@ class NodeConnectionManager:
         }
         for node_id in list(self._connections):
             if node_id not in wanted:
-                self._drop(node_id)
+                await self._drop(node_id)
         for node_id in wanted:
-            if node_id in self._connections:
+            if node_id in self._connections and node_id in self._tasks:
                 continue
+            if node_id in self._connections or node_id in self._tasks:
+                await self._drop(node_id)
             node = self.registry.get(node_id)
             if node is None or not node.agent_ws_url:
                 continue
@@ -81,17 +84,45 @@ class NodeConnectionManager:
                 session=session,
             )
             self._connections[node_id] = connection
-            self._tasks[node_id] = asyncio.create_task(connection.run())
+            run = connection.run()
+            try:
+                self._tasks[node_id] = asyncio.create_task(run)
+            except BaseException:
+                run.close()
+                self._connections.pop(node_id, None)
+                raise
             LOGGER.info("opening control channel to node %s", node_id)
 
-    def _drop(self, node_id: str) -> None:
+    def _reap_finished_tasks(self) -> None:
+        """Forget channels whose run loop exited so reconciliation can recreate them."""
+        for node_id, task in list(self._tasks.items()):
+            if not task.done():
+                continue
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:  # noqa: BLE001 - preserve reconciliation liveness
+                LOGGER.warning("node %s connection task exited: %s", node_id, exc)
+            self._connections.pop(node_id, None)
+            self._tasks.pop(node_id, None)
+
+    async def _drop(self, node_id: str) -> None:
+        """Close one channel before reconciliation can create its replacement."""
         task = self._tasks.pop(node_id, None)
+        connection = self._connections.pop(node_id, None)
         if task is not None:
             task.cancel()
-        self._connections.pop(node_id, None)
+        try:
+            if connection is not None:
+                await connection.close()
+        finally:
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
 
     async def run(self) -> None:
         """Periodically reconcile the set of connections."""
+        self._closing = False
         while not self._closing:
             try:
                 await self._sync()
@@ -115,8 +146,14 @@ class NodeConnectionManager:
     async def close(self) -> None:
         """Tear down every control channel."""
         self._closing = True
-        for node_id in list(self._connections):
-            self._drop(node_id)
+        for node_id in set(self._connections) | set(self._tasks):
+            try:
+                await self._drop(node_id)
+            except Exception as exc:  # noqa: BLE001 - continue closing other channels
+                LOGGER.exception("could not close node %s channel: %s", node_id, exc)
         if self._session is not None and self._owns_session:
-            await self._session.close()
-            self._session = None
+            session = self._session
+            try:
+                await session.close()
+            finally:
+                self._session = None

@@ -29,12 +29,13 @@ import aiohttp
 from horizon_broker.config import BrokerConfig
 from horizon_broker.contracts.errors import (
     BrokerDrainingError,
+    InvalidSubmissionError,
     JobExpiredError,
     NoCapacityError,
     QueueFullError,
     UnknownJobError,
 )
-from horizon_broker.contracts.jobs import InferenceJob, JobState
+from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState
 from horizon_broker.contracts.nodes import NodeHealth, PowerClass
 from horizon_broker.contracts.recovery import utcnow
 from horizon_broker.nodes.executor import JobSupervisor
@@ -73,6 +74,8 @@ class BrokerEngine:
         session: aiohttp.ClientSession | None = None,
     ) -> None:
         self.config = config
+        self._session = session
+        self._owns_session = session is None
         self.metrics = MetricsRegistry()
         self.metrics.describe("horizon_jobs_submitted_total", "Jobs accepted by the ingress API.")
         self.metrics.describe("horizon_jobs_completed_total", "Jobs that finished successfully.")
@@ -82,6 +85,19 @@ class BrokerEngine:
             "horizon_jobs_restored_total", "Jobs replayed from the journal on a cold start."
         )
         self.metrics.describe("horizon_flex_batch_size", "Size of the dispatched Flex batches.")
+        self.metrics.describe("horizon_batches_admitted_total", "Batch assignment frames accepted by a node.")
+        self.metrics.describe("horizon_batches_rejected_total", "Batch assignment frames rejected by a node.")
+        self.metrics.describe("horizon_batch_members_total", "Jobs admitted through a batch assignment frame.")
+        self.metrics.describe(
+            "horizon_batch_active_members", "Currently active jobs admitted through batch frames."
+        )
+        self.metrics.describe(
+            "horizon_ledger_fallback_total", "Recovery operations that fell back to the local journal."
+        )
+        self.metrics.describe(
+            "horizon_journal_replay_failures_total", "Journal replay attempts that failed during startup."
+        )
+        self.metrics.set_gauge("horizon_batch_active_members", 0)
         self.metrics.describe("horizon_recovery_seconds", "Seconds from fault to re-dispatch.")
         self.metrics.describe(
             "horizon_splits_handed_off_total", "Prefill/decode splits that handed a KV cache over."
@@ -98,8 +114,15 @@ class BrokerEngine:
             "horizon_splits_handed_off_total",
             "horizon_splits_degraded_total",
             "horizon_jobs_restored_total",
+            "horizon_journal_replay_failures_total",
+            "horizon_batches_admitted_total",
+            "horizon_batches_rejected_total",
         ):
             self.metrics.declare(metric)
+        for outcome in ("admitted", "rejected"):
+            self.metrics.declare("horizon_batch_members_total", outcome=outcome)
+        for reason in ("commit", "query", "invalid"):
+            self.metrics.declare("horizon_ledger_fallback_total", reason=reason)
         for tier in ("interactive", "flex"):
             self.metrics.declare("horizon_jobs_submitted_total", tier=tier)
         for resumed in ("true", "false"):
@@ -128,6 +151,7 @@ class BrokerEngine:
             journal=self.journal,
             ledger_config=config.ledger,
             journal_max_bytes=config.journal_max_bytes,
+            metrics=self.metrics,
         )
 
         self.supervisor = JobSupervisor(
@@ -145,8 +169,9 @@ class BrokerEngine:
             self.registry,
             self.supervisor,
             config=config.heartbeat,
+            session=session,
         )
-        self.probe = NodeHealthProbe(self.registry, config=config.heartbeat)
+        self.probe = NodeHealthProbe(self.registry, config=config.heartbeat, session=session)
         self.dispatcher = Dispatcher(self.registry, self.router, self.supervisor)
         self.recovery = RecoveryCoordinator(
             store=self.store,
@@ -168,6 +193,7 @@ class BrokerEngine:
         self._chunk_subscribers: dict[str, list[asyncio.Queue[str | None]]] = {}
         self._chunk_buffers: dict[str, list[str]] = {}
         self._journal_tasks: set[asyncio.Task[None]] = set()
+        self._execution_tasks: set[asyncio.Task[None]] = set()
         self._tasks: list[asyncio.Task[None]] = []
         self._ollama_clients: dict[str, OllamaClient] = {}
         self._running = False
@@ -197,15 +223,35 @@ class BrokerEngine:
         """Start the scheduler loops, the connection manager and the watchdog."""
         if self._running:
             return
+        if self._session is None:
+            self._session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.config.ollama.timeout_seconds)
+            )
+        # One broker-owned pool serves probes, control channels, Ollama and the
+        # ledger. Individual requests still apply their own tighter timeout.
+        self.ledger._session = self._session
+        self.ledger._owns_session = False
+        self.manager._session = self._session
+        self.manager._owns_session = False
+        self.probe._session = self._session
+        self.probe._owns_session = False
         self._running = True
-        restored = await self._replay_journal()
-        self._tasks = [
-            asyncio.create_task(self._interactive_loop(), name="horizon-interactive"),
-            asyncio.create_task(self._flex_loop(), name="horizon-flex"),
-            asyncio.create_task(self.manager.run(), name="horizon-connections"),
-            asyncio.create_task(self.watchdog.run(), name="horizon-watchdog"),
-            asyncio.create_task(self.probe.run(), name="horizon-probe"),
-        ]
+        self._draining = False
+        try:
+            restored = await self._replay_journal()
+            self._tasks = []
+            self._tasks.append(
+                self._create_task_safely(self._interactive_loop(), name="horizon-interactive")
+            )
+            self._tasks.append(self._create_task_safely(self._flex_loop(), name="horizon-flex"))
+            self._tasks.append(
+                self._create_task_safely(self.manager.run(), name="horizon-connections")
+            )
+            self._tasks.append(self._create_task_safely(self.watchdog.run(), name="horizon-watchdog"))
+            self._tasks.append(self._create_task_safely(self.probe.run(), name="horizon-probe"))
+        except BaseException:
+            await self.stop(drain=False)
+            raise
         LOGGER.info(
             "horizon broker started: %d static nodes, window=%.0fs, %d job(s) replayed",
             len(self.config.static_nodes),
@@ -220,25 +266,55 @@ class BrokerEngine:
         jobs finish (up to ``drain_timeout_seconds``) and then tears down.
         Without it the broker stops immediately.
         """
-        if drain and self._running:
-            await self.drain(timeout=self.config.drain_timeout_seconds)
-        self._running = False
-        for task in self._tasks:
-            task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-        # A cancelled job's terminal envelope is still being written; the
-        # journal must not go dark under a pending commit.
-        pending = [task for task in self._journal_tasks if not task.done()]
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        self._journal_tasks.clear()
-        await self.manager.close()
-        await self.probe.close()
-        await self._close_ollama_clients()
-        await self.ledger.close()
-        LOGGER.info("horizon broker stopped")
+        try:
+            if drain and self._running:
+                await self.drain(timeout=self.config.drain_timeout_seconds)
+            elif not drain:
+                # Immediate shutdown still has to release supervisor-owned
+                # contexts before node connections and model clients close.
+                # Otherwise reservations and waiters survive the broker.
+                for job_id in list(self.supervisor.active_jobs()):
+                    if await self.supervisor.cancel(job_id):
+                        job = self._jobs.get(job_id)
+                        if job is not None:
+                            self._on_job_finished(job)
+        finally:
+            self._running = False
+            for task in self._tasks:
+                task.cancel()
+            if self._tasks:
+                await asyncio.gather(*self._tasks, return_exceptions=True)
+            self._tasks.clear()
+            for task in self._execution_tasks:
+                task.cancel()
+            if self._execution_tasks:
+                await asyncio.gather(*self._execution_tasks, return_exceptions=True)
+            self._execution_tasks.clear()
+            # A cancelled job's terminal envelope is still being written; the
+            # journal must not go dark under a pending commit.
+            pending = [task for task in self._journal_tasks if not task.done()]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            self._journal_tasks.clear()
+            for resource, close in (
+                ("node connection manager", self.manager.close),
+                ("node health probe", self.probe.close),
+                ("Ollama clients", self._close_ollama_clients),
+                ("ledger client", self.ledger.close),
+            ):
+                try:
+                    await close()
+                except Exception as exc:  # noqa: BLE001 - continue shutting down other resources
+                    LOGGER.exception("could not close %s: %s", resource, exc)
+            if self._session is not None and self._owns_session:
+                session = self._session
+                try:
+                    await session.close()
+                except Exception as exc:  # noqa: BLE001 - shutdown must finish all cleanup
+                    LOGGER.exception("could not close broker HTTP session: %s", exc)
+                finally:
+                    self._session = None
+            LOGGER.info("horizon broker stopped")
 
     async def drain(self, timeout: float) -> bool:
         """Stop accepting work and wait for the in-flight jobs to finish.
@@ -249,12 +325,29 @@ class BrokerEngine:
         LOGGER.info("draining: refusing new work, waiting for in-flight jobs")
         deadline = time.monotonic() + max(0.0, timeout)
         while time.monotonic() < deadline:
-            if not self.supervisor.active_jobs() and not self._inflight_interactive:
+            if (
+                not self.supervisor.active_jobs()
+                and not self._inflight_interactive
+                and not self._inflight_flex
+            ):
                 break
             await asyncio.sleep(0.05)
         pending = self.supervisor.active_jobs()
-        if pending:
-            LOGGER.warning("drain timed out with %d job(s) still running", len(pending))
+        if pending or self._inflight_interactive or self._inflight_flex:
+            LOGGER.warning(
+                "drain timed out with %d job(s) and %d Flex batch(es) still running",
+                len(pending),
+                self._inflight_flex,
+            )
+            # Do not close Ollama clients while their streaming tasks are still
+            # attached to the session.  A timed-out drain is terminal for the
+            # broker lifecycle, so cancel the remaining executions and publish
+            # their terminal state before teardown closes shared resources.
+            for job_id in pending:
+                if await self.supervisor.cancel(job_id):
+                    job = self._jobs.get(job_id)
+                    if job is not None:
+                        self._on_job_finished(job)
             return False
         LOGGER.info("drain complete")
         return True
@@ -273,6 +366,10 @@ class BrokerEngine:
             LOGGER.info("job %s already known; ignoring duplicate submission", job.job_id)
             self.metrics.incr("horizon_jobs_duplicate_total")
             return existing
+        if job.state is not JobState.QUEUED:
+            raise InvalidSubmissionError(
+                f"new submissions must start queued, got {job.state.value}"
+            )
         if self._draining:
             raise BrokerDrainingError("the broker is draining and is not accepting work")
         if self._queue_depth() >= self.config.scheduling.max_queue_depth:
@@ -311,6 +408,11 @@ class BrokerEngine:
             return False
         cancelled = await self.supervisor.cancel(job_id)
         if not cancelled:
+            if job.state in TERMINAL_STATES:
+                # The node may have completed the job while the cancellation
+                # frame was in flight. A late cancel must not rewrite that
+                # authoritative terminal result.
+                return False
             self.queue.remove(job_id)
             job.state = JobState.CANCELLED
         # A cancellation is a terminal answer: the waiter must be released,
@@ -359,6 +461,7 @@ class BrokerEngine:
         """
         if usage is not None:
             self._usage[job.job_id] = usage
+        self.recovery.forget(job.job_id)
         if job.state is JobState.COMPLETED:
             self.metrics.incr("horizon_jobs_completed_total")
         elif job.state is JobState.FAILED:
@@ -378,7 +481,7 @@ class BrokerEngine:
         write alive until ``stop`` collects it.
         """
         try:
-            task = asyncio.create_task(self._journal_state(job))
+            task = self._create_task_safely(self._journal_state(job))
         except RuntimeError:  # no running loop; nothing durable to promise
             return
         self._journal_tasks.add(task)
@@ -402,6 +505,7 @@ class BrokerEngine:
         try:
             jobs = await self.store.load_jobs()
         except Exception as exc:  # noqa: BLE001 - a broken journal must not block startup
+            self.metrics.incr("horizon_journal_replay_failures_total")
             LOGGER.warning("could not read the journal for replay: %s", exc)
             return 0
         restored = 0
@@ -411,9 +515,22 @@ class BrokerEngine:
                 continue
             if job.attempt >= self.config.recovery.max_attempts:
                 job.state = JobState.FAILED
+                job.phase = ExecutionPhase.MONOLITHIC
+                job.assigned_node_id = None
                 job.error = "recovery attempts exhausted before the restart"
+                self._jobs[job.job_id] = job
+                try:
+                    await self.store.store_job_payload(job)
+                except Exception as exc:  # noqa: BLE001 - replay must remain available
+                    LOGGER.warning(
+                        "could not persist exhausted replay for job %s: %s",
+                        job.job_id,
+                        exc,
+                    )
+                self.metrics.incr("horizon_jobs_failed_total")
                 continue
             job.state = JobState.QUEUED
+            job.phase = ExecutionPhase.MONOLITHIC
             job.not_before = None
             job.assigned_node_id = None
             self._jobs[job.job_id] = job
@@ -540,6 +657,17 @@ class BrokerEngine:
                 "interactive": self._inflight_interactive,
                 "flex": self._inflight_flex,
             },
+            "batches": {
+                "active_members": self.metrics.gauge("horizon_batch_active_members"),
+                "admitted": self.metrics.counter("horizon_batches_admitted_total"),
+                "rejected": self.metrics.counter("horizon_batches_rejected_total"),
+                "members_admitted": self.metrics.counter(
+                    "horizon_batch_members_total", outcome="admitted"
+                ),
+                "members_rejected": self.metrics.counter(
+                    "horizon_batch_members_total", outcome="rejected"
+                ),
+            },
             "draining": self._draining,
             "tracked_jobs": len(self._jobs),
         }
@@ -559,7 +687,7 @@ class BrokerEngine:
                     job = self.queue.pop_interactive(time.time())
                     if job is not None:
                         self._inflight_interactive += 1
-                        asyncio.create_task(self._run_interactive(job))
+                        self._track_execution(self._run_interactive(job))
                         continue
                 await self._wait_for_work(self.config.scheduling.poll_interval_seconds)
             except asyncio.CancelledError:
@@ -581,7 +709,7 @@ class BrokerEngine:
                     )
                     for batch in batches:
                         self._inflight_flex += 1
-                        asyncio.create_task(self._run_flex(batch))
+                        self._track_execution(self._run_flex(batch))
                     if batches:
                         continue
                 await self._wait_for_work(self.config.scheduling.poll_interval_seconds)
@@ -612,6 +740,39 @@ class BrokerEngine:
         finally:
             self._inflight_interactive -= 1
 
+    def _track_execution(self, coroutine: Any) -> None:
+        """Keep scheduler child tasks inside the broker shutdown boundary."""
+        task = self._create_task_safely(coroutine)
+        self._execution_tasks.add(task)
+        task.add_done_callback(self._finish_execution_task)
+
+    @staticmethod
+    def _create_task_safely(coroutine: Any, *, name: str | None = None) -> asyncio.Task[None]:
+        """Close a coroutine when task creation fails during lifecycle rollback."""
+        try:
+            if name is None:
+                return asyncio.create_task(coroutine)
+            return asyncio.create_task(coroutine, name=name)
+        except BaseException:
+            coroutine.close()
+            raise
+
+    def _finish_execution_task(self, task: asyncio.Task[None]) -> None:
+        """Observe child-task failures before removing them from shutdown tracking."""
+        self._execution_tasks.discard(task)
+        if task.cancelled():
+            return
+        try:
+            error = task.exception()
+        except asyncio.CancelledError:
+            return
+        if error is not None:
+            LOGGER.error(
+                "tracked scheduler execution task failed: %s",
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
     async def _run_flex(self, batch: FlexBatch) -> None:
         try:
             plans = self.planner.plan(list(batch.jobs), self.registry.all())
@@ -622,8 +783,30 @@ class BrokerEngine:
                     batch.size,
                 )
                 for job in batch.jobs:
+                    first_deferral = not any(
+                        tag in {"recovered:no-capacity", "recovered:unroutable"}
+                        for tag in job.tags
+                    )
+                    job.not_before = utcnow() + timedelta(seconds=2)
                     self.queue.requeue_front(job, reason="unroutable")
+                    if first_deferral:
+                        self.metrics.incr("horizon_jobs_deferred_total")
                 return
+            planned_ids = {job.job_id for plan in plans for job in plan.jobs}
+            for job in batch.jobs:
+                if job.job_id not in planned_ids:
+                    # A mixed batch may contain a job that cannot fit any
+                    # currently available node even though its siblings can.
+                    # Preserve it instead of silently losing it with the
+                    # successfully planned subset.
+                    first_deferral = not any(
+                        tag in {"recovered:no-capacity", "recovered:unroutable"}
+                        for tag in job.tags
+                    )
+                    job.not_before = utcnow() + timedelta(seconds=2)
+                    self.queue.requeue_front(job, reason="unroutable")
+                    if first_deferral:
+                        self.metrics.incr("horizon_jobs_deferred_total")
             self.metrics.observe("horizon_flex_batch_size", float(batch.size))
             self.metrics.incr(
                 "horizon_flex_batches_total", reason=batch.reason, model=batch.model
@@ -635,12 +818,40 @@ class BrokerEngine:
                 batch.reason,
             )
             for plan in plans:
+                node = self.registry.get(plan.node_id)
+                if (
+                    node is not None
+                    and node.supports_batch
+                    and all(not decision.is_split for decision in plan.decisions)
+                ):
+                    try:
+                        await self.supervisor.start_batch(plan.jobs, plan.decisions)
+                    except Exception:
+                        LOGGER.exception("batch admission failed on node %s", plan.node_id)
+                        for job in plan.jobs:
+                            if job.state in TERMINAL_STATES:
+                                # A member may have completed before the
+                                # batch transport reported its failure. Do
+                                # not put that terminal result back in flight.
+                                continue
+                            job.not_before = utcnow() + timedelta(seconds=2)
+                            self.queue.requeue_front(job, reason="batch-admission")
+                            self.metrics.incr("horizon_jobs_deferred_total")
+                    continue
                 for job, decision in zip(plan.jobs, plan.decisions, strict=True):
                     await self._execute(job, decision)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
             LOGGER.exception("flex batch failed: %s", exc)
+            for job in batch.jobs:
+                if job.state in TERMINAL_STATES or self.queue.contains(job.job_id):
+                    continue
+                if self.supervisor.context(job.job_id) is not None:
+                    continue
+                job.not_before = utcnow() + timedelta(seconds=2)
+                self.queue.requeue_front(job, reason="batch-error")
+                self.metrics.incr("horizon_jobs_deferred_total")
         finally:
             self._inflight_flex -= 1
 
@@ -648,11 +859,15 @@ class BrokerEngine:
         """Route and start one job."""
         try:
             if decision is None:
-                decision = self.dispatcher.route(job)
+                decision = self.dispatcher.route(
+                    job,
+                    excluded=self.recovery.avoided_nodes(job.job_id),
+                )
             await self.dispatcher.dispatch(job, decision)
         except NoCapacityError as exc:
             LOGGER.warning("deferring job %s: %s", job.job_id, exc)
             job.state = JobState.QUEUED
+            job.phase = ExecutionPhase.MONOLITHIC
             job.not_before = utcnow() + timedelta(seconds=2)
             self.queue.requeue_front(job, reason="no-capacity")
             self.metrics.incr("horizon_jobs_deferred_total")
@@ -689,7 +904,20 @@ class BrokerEngine:
         if outcome.failure is not None:
             # The typed failure is the operator's answer: it says which
             # budget was spent, not that something went wrong.
-            job.error = str(outcome.failure)
+            if not outcome.dispatched and job.state in TERMINAL_STATES:
+                job.error = str(outcome.failure)
+            elif outcome.dispatched:
+                LOGGER.warning(
+                    "recovery for job %s exceeded its budget after dispatch; "
+                    "preserving the active job state",
+                    job.job_id,
+                )
+            else:
+                LOGGER.warning(
+                    "recovery for job %s exceeded its budget while queued; "
+                    "preserving the retryable job state",
+                    job.job_id,
+                )
             LOGGER.error("recovery of job %s failed: %s", job.job_id, outcome.failure)
         if outcome.dispatched:
             self.metrics.incr("horizon_jobs_recovered_total", resumed=str(outcome.resumed).lower())
@@ -720,15 +948,24 @@ class BrokerEngine:
                 base_url,
                 timeout_seconds=self.config.ollama.timeout_seconds,
                 keep_alive=self.config.ollama.keep_alive,
+                session=self._session,
             )
             self._ollama_clients[base_url] = client
         return client
 
     async def _close_ollama_clients(self) -> None:
         """Close every cached Ollama client."""
-        for client in self._ollama_clients.values():
-            await client.close()
+        clients = tuple(self._ollama_clients.values())
         self._ollama_clients.clear()
+        failures: list[Exception] = []
+        for client in clients:
+            try:
+                await client.close()
+            except Exception as exc:  # noqa: BLE001 - close every client before reporting failure
+                failures.append(exc)
+                LOGGER.exception("could not close Ollama client: %s", exc)
+        if failures:
+            raise failures[0]
 
     async def _assign(self, node_id: str, frame: dict[str, Any]) -> None:
         """Send an assignment frame to an agent container."""

@@ -39,8 +39,36 @@ async def start_stream_server(body: bytes, endpoint: str = "/api/generate") -> T
         (b"[]\n", "must be an object"),
         (b"\xff\n", "invalid UTF-8"),
         (b'{"done":"false"}\n', "done must be a boolean"),
+        (b'{"eval_count":"1","done":false}\n', "eval_count must be a non-negative integer"),
+        (b'{"prompt_eval_count":-1,"done":false}\n', "prompt_eval_count must be a non-negative integer"),
+        (b'{"response":1,"done":false}\n', "response must be a string"),
+        (b'{"message":{"content":1},"done":false}\n', "message content must be a string"),
+        (b'{"error":{"message":"bad"}}\n', "error must be a string"),
+        (b'{"done_reason":1,"done":false}\n', "done_reason must be a string"),
+        (b'{"model":1,"done":false}\n', "model must be a canonical string"),
+        (b'{"model":"","done":false}\n', "model must be a canonical string"),
+        (b'{"model":" synthetic-model","done":false}\n', "model must be a canonical string"),
+        (b'{"response":"done","done":true,"metadata":NaN}\n', "invalid JSON"),
     ],
-    ids=["empty", "truncated", "engine-error", "invalid-json", "array", "encoding", "done-type"],
+    ids=[
+        "empty",
+        "truncated",
+        "engine-error",
+        "invalid-json",
+        "array",
+        "encoding",
+        "done-type",
+        "eval-count-type",
+        "prompt-count-range",
+        "response-type",
+        "message-content-type",
+        "error-type",
+        "done-reason-type",
+        "model-type",
+        "model-empty",
+        "model-padding",
+        "non-standard-number",
+    ],
 )
 async def test_invalid_streams_do_not_succeed(chat: bool, body: bytes, error: str) -> None:
     """A successful HTTP response alone does not prove generation completed."""
@@ -133,3 +161,66 @@ async def test_a_generation_streams_its_tokens() -> None:
     finally:
         await client.close()
         await server.close()
+
+
+@pytest.mark.parametrize("chat", [False, True], ids=["generate", "chat"])
+async def test_model_overrides_must_be_canonical(chat: bool) -> None:
+    payload = InferencePayload(
+        model="synthetic-model",
+        messages=[ChatMessage(role="user", content="hello")] if chat else [],
+    )
+    render = payload.to_chat_request if chat else payload.to_engine_request
+    with pytest.raises(ValueError, match="model override"):
+        render(model_override=" synthetic-model")
+
+
+@pytest.mark.parametrize(
+    ("path", "method", "body", "error"),
+    [
+        ("/api/version", "version", "[]", "version returned"),
+        ("/api/version", "version", '{"version":1}', "invalid version"),
+        ("/api/version", "version", '{"version":""}', "invalid version"),
+        ("/api/version", "version", '{"version":" 0.1 "}', "invalid version"),
+        ("/api/tags", "list_models", '{"models":["bad"]}', "model entry"),
+        ("/api/tags", "list_models", '{"models":[{"name":" "}]}', "model entry"),
+        ("/api/tags", "list_models", '{"models":[{"name":" model"}]}', "non-canonical"),
+        ("/api/tags", "list_models", '{"models":[{"name":"model"},{"name":"model"}]}', "duplicate"),
+        ("/api/ps", "ps", '{"models":["bad"]}', "model entry"),
+        ("/api/ps", "ps", '{"models":[{}]}', "model entry"),
+        ("/api/ps", "ps", '{"models":[{"name":"model "}]}', "non-canonical"),
+        ("/api/ps", "ps", '{"models":[{"name":"model"},{"name":"model"}]}', "duplicate"),
+        ("/api/version", "version", "not-json", "invalid JSON"),
+        ("/api/tags", "list_models", "not-json", "invalid JSON"),
+        ("/api/ps", "ps", "not-json", "invalid JSON"),
+    ],
+)
+async def test_malformed_metadata_responses_are_typed_failures(
+    path: str, method: str, body: str, error: str
+) -> None:
+    async def handler(request: web.Request) -> web.Response:
+        return web.Response(text=body, content_type="application/json")
+
+    app = web.Application()
+    app.router.add_get(path, handler)
+    server = TestServer(app)
+    await server.start_server()
+    client = OllamaClient(str(server.make_url("")))
+    try:
+        with pytest.raises(OllamaError, match=error):
+            await getattr(client, method)()
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_ollama_forgets_owned_session_when_close_fails() -> None:
+    class Session:
+        async def close(self) -> None:
+            raise RuntimeError("synthetic session close failure")
+
+    client = OllamaClient("http://synthetic")
+    client._session = Session()  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="session close failure"):
+        await client.close()
+    assert client._session is None

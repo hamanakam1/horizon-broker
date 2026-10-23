@@ -12,8 +12,10 @@ the registry like any other node, and the watchdog handles it.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
+from typing import NoReturn
 
 import aiohttp
 
@@ -22,6 +24,11 @@ from horizon_broker.contracts.nodes import ExecutionMode
 from horizon_broker.nodes.registry import NodeRegistry
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    """Reject Python-specific non-standard JSON numeric constants."""
+    raise ValueError(f"non-standard JSON constant: {value}")
 
 
 @dataclass(frozen=True)
@@ -59,8 +66,11 @@ class NodeHealthProbe:
     async def close(self) -> None:
         """Close the HTTP session when this client owns it."""
         if self._session is not None and self._owns_session:
-            await self._session.close()
-            self._session = None
+            session = self._session
+            try:
+                await session.close()
+            finally:
+                self._session = None
 
     def _targets(self) -> list[str]:
         """Nodes that need a probe: direct execution without a control channel."""
@@ -75,24 +85,46 @@ class NodeHealthProbe:
     async def probe_once(self) -> list[ProbeResult]:
         """Probe every direct-mode node once."""
         session = await self._get_session()
-        results: list[ProbeResult] = []
-        for node_id in self._targets():
-            node = self.registry.get(node_id)
-            if node is None or not node.ollama_url:
-                continue
-            url = f"{node.ollama_url.rstrip('/')}/api/version"
-            try:
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        self.registry.record_heartbeat(node_id)
-                        results.append(ProbeResult(node_id, True))
-                    else:
-                        results.append(
-                            ProbeResult(node_id, False, f"HTTP {response.status}")
+        return list(
+            await asyncio.gather(
+                *(self._probe_node(session, node_id) for node_id in self._targets())
+            )
+        )
+
+    async def _probe_node(self, session: aiohttp.ClientSession, node_id: str) -> ProbeResult:
+        """Probe one node independently so a slow peer cannot delay its siblings."""
+        node = self.registry.get(node_id)
+        if node is None or not node.ollama_url:
+            return ProbeResult(node_id, False, "node is no longer registered")
+        url = f"{node.ollama_url.rstrip('/')}/api/version"
+        try:
+            async with session.get(
+                url,
+                timeout=aiohttp.ClientTimeout(total=self.timeout_seconds),
+            ) as response:
+                if response.status == 200:
+                    try:
+                        body = json.loads(
+                            await response.text(), parse_constant=_reject_json_constant
                         )
-            except (aiohttp.ClientError, TimeoutError, OSError) as exc:
-                results.append(ProbeResult(node_id, False, str(exc)))
-        return results
+                    except (aiohttp.ClientError, ValueError) as exc:
+                        return ProbeResult(node_id, False, f"invalid version response: {exc}")
+                    version = body.get("version") if isinstance(body, dict) else None
+                    if (
+                        isinstance(version, str)
+                        and version.strip()
+                        and version == version.strip()
+                    ):
+                        self.registry.record_heartbeat(node_id)
+                        return ProbeResult(node_id, True)
+                    return ProbeResult(node_id, False, "invalid version response")
+                return ProbeResult(node_id, False, f"HTTP {response.status}")
+        except (aiohttp.ClientError, TimeoutError, OSError) as exc:
+            detail = "request timed out" if isinstance(exc, TimeoutError) else str(exc)
+            return ProbeResult(node_id, False, detail or type(exc).__name__)
+        except Exception as exc:  # noqa: BLE001 - one probe must not suppress its siblings
+            LOGGER.warning("unexpected probe failure for node %s: %s", node_id, exc)
+            return ProbeResult(node_id, False, str(exc) or type(exc).__name__)
 
     async def run(self) -> None:
         """Probe the fleet on the heartbeat interval, forever."""

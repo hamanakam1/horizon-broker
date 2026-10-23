@@ -41,6 +41,7 @@ async def test_exhausted_recovery_finishes_callers_and_survives_restart(
         await engine.supervisor.on_node_lost(node.node_id, "synthetic node loss")
 
         assert job.state is JobState.FAILED
+        assert job.assigned_node_id is None
         assert "max attempts exceeded" in (job.error or "")
         assert await wait_for(waiter.done, timeout=0.2)
         assert await waiter is None

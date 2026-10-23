@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
+
+import pytest
 
 from horizon_broker.contracts.nodes import PowerClass
 from horizon_broker.contracts.recovery import utcnow
@@ -25,6 +27,11 @@ def test_a_node_inside_its_quarantine_is_not_eligible() -> None:
         update={"quarantined_until": utcnow() + timedelta(seconds=60)}
     )
     assert _selector().eligible([node], MODEL) == []
+
+
+def test_placement_rejects_a_naive_clock() -> None:
+    with pytest.raises(ValueError, match="placement timestamp must be timezone-aware"):
+        _selector().eligible([make_node("pi-01")], MODEL, now=datetime(2026, 10, 23, 12, 0, 0))
 
 
 def test_a_node_whose_quarantine_expired_is_eligible_again() -> None:
