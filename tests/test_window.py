@@ -10,13 +10,15 @@ from horizon_broker.scheduler.window import WindowPolicy
 from tests.conftest import make_job
 
 POLICY = WindowPolicy(window_seconds=10.0, min_batch_size=4, max_batch_size=8, min_dwell_seconds=1.0)
+# Keep job deadlines beyond the simulated batching windows; expiry has separate tests.
+JOB_LATENCY_MS = 120_000
 
 
 def test_window_holds_until_the_minimum_batch_is_reached() -> None:
     queue = JobPriorityQueue()
     now = time.time()
     for _ in range(3):
-        queue.submit(make_job(tier=PriorityTier.FLEX))
+        queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     assert queue.plan_flex(now, POLICY) == []
 
 
@@ -24,7 +26,7 @@ def test_window_dispatches_when_min_batch_and_dwell_are_satisfied() -> None:
     queue = JobPriorityQueue()
     now = time.time()
     for _ in range(4):
-        queue.submit(make_job(tier=PriorityTier.FLEX))
+        queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     assert queue.plan_flex(now, POLICY) == []
     batches = queue.plan_flex(now + 1.5, POLICY)
     assert len(batches) == 1
@@ -36,7 +38,7 @@ def test_window_dispatches_when_min_batch_and_dwell_are_satisfied() -> None:
 def test_window_expires_and_flushes_what_it_has() -> None:
     queue = JobPriorityQueue()
     now = time.time()
-    queue.submit(make_job(tier=PriorityTier.FLEX))
+    queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     assert queue.plan_flex(now, POLICY) == []
     batches = queue.plan_flex(now + 11.0, POLICY)
     assert len(batches) == 1
@@ -49,7 +51,7 @@ def test_a_full_batch_leaves_the_window_immediately() -> None:
     queue = JobPriorityQueue()
     now = time.time()
     for _ in range(4):
-        queue.submit(make_job(tier=PriorityTier.FLEX))
+        queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     batches = queue.plan_flex(now, policy)
     assert len(batches) == 1
     assert batches[0].reason == "batch_full"
@@ -59,9 +61,9 @@ def test_windows_are_independent_per_model() -> None:
     queue = JobPriorityQueue()
     now = time.time()
     for _ in range(4):
-        queue.submit(make_job(tier=PriorityTier.FLEX, model="qwen2.5:7b"))
+        queue.submit(make_job(tier=PriorityTier.FLEX, model="qwen2.5:7b", max_latency_ms=JOB_LATENCY_MS))
     for _ in range(4):
-        queue.submit(make_job(tier=PriorityTier.FLEX, model="qwen3:8b"))
+        queue.submit(make_job(tier=PriorityTier.FLEX, model="qwen3:8b", max_latency_ms=JOB_LATENCY_MS))
     # The first pass opens a window per model; nothing is dispatched yet.
     assert queue.plan_flex(now, POLICY) == []
     batches = queue.plan_flex(now + 1.5, POLICY)
@@ -75,7 +77,7 @@ def test_power_gate_holds_the_batch_back() -> None:
     queue = JobPriorityQueue()
     now = time.time()
     for _ in range(4):
-        queue.submit(make_job(tier=PriorityTier.FLEX))
+        queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     assert queue.plan_flex(now + 1.5, POLICY, power_ok=False) == []
     assert len(queue.pending_flex()) == 4
 
@@ -85,7 +87,7 @@ def test_batch_is_capped_at_max_batch_size() -> None:
     queue = JobPriorityQueue()
     now = time.time()
     for _ in range(7):
-        queue.submit(make_job(tier=PriorityTier.FLEX))
+        queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     batches = queue.plan_flex(now, policy)
     assert batches[0].size == 3
     assert len(queue.pending_flex()) == 4
@@ -103,7 +105,7 @@ def test_an_idle_fleet_flushes_the_window_early() -> None:
     )
     queue = JobPriorityQueue()
     now = time.time()
-    queue.submit(make_job(tier=PriorityTier.FLEX))
+    queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
 
     # The first pass opens the window; the fleet is busy, so nothing goes out.
     assert queue.plan_flex(now, policy, fleet_idle=False) == []
@@ -124,6 +126,6 @@ def test_the_idle_flush_can_be_switched_off() -> None:
     )
     queue = JobPriorityQueue()
     now = time.time()
-    queue.submit(make_job(tier=PriorityTier.FLEX))
+    queue.submit(make_job(tier=PriorityTier.FLEX, max_latency_ms=JOB_LATENCY_MS))
     assert queue.plan_flex(now, policy) == []
     assert queue.plan_flex(now + 3.0, policy, fleet_idle=True) == []
