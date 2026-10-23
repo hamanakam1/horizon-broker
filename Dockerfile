@@ -16,17 +16,18 @@ RUN pip install --no-cache-dir .
 RUN mkdir -p /var/lib/horizon-broker && \
     useradd --create-home --uid 10001 horizon && \
     chown -R horizon:horizon /var/lib/horizon-broker
-USER horizon
-
 # The documented run command points at config/broker.yaml, which the compose
 # stack mounts. A bare `docker run` has no such mount - fall back to the
 # bundled example configuration so the image answers on its own instead of
 # exiting exactly at the first health check.
 RUN test -f /app/config/broker.yaml || cp /app/config/broker.example.yaml /app/config/broker.yaml
 
+USER horizon
+
 # The journal belongs in the mounted volume: the compose stack persists
 # /var/lib/horizon-broker, and the config layer only reads HORIZON_BROKER_*.
 ENV HORIZON_BROKER_JOURNAL_PATH=/var/lib/horizon-broker/journal.jsonl
+ENV HORIZON_BROKER_HOST=0.0.0.0
 EXPOSE 8791
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

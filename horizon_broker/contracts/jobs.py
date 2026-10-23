@@ -92,6 +92,33 @@ class SamplingParams(BrokerModel):
     stop: tuple[str, ...] = ()
     repeat_penalty: float = Field(default=1.1, ge=0.0, le=2.0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_boolean_numerics(cls, data: Any) -> Any:
+        """Keep JSON booleans from becoming engine tuning values."""
+        if isinstance(data, dict):
+            for field_name in (
+                "temperature",
+                "top_p",
+                "top_k",
+                "num_predict",
+                "seed",
+                "repeat_penalty",
+            ):
+                if isinstance(data.get(field_name), bool):
+                    raise ValueError(f"{field_name} must be numeric, not boolean")
+            for field_name in ("temperature", "top_p", "repeat_penalty"):
+                if field_name in data and not isinstance(data.get(field_name), (int, float)):
+                    raise ValueError(f"{field_name} must be numeric")
+            for field_name in ("top_k", "num_predict", "seed"):
+                if (
+                    field_name in data
+                    and data.get(field_name) is not None
+                    and not isinstance(data.get(field_name), int)
+                ):
+                    raise ValueError(f"{field_name} must be an integer")
+        return data
+
     def to_engine_params(self) -> dict[str, Any]:
         """Ollama ``/api/generate`` option block."""
         options: dict[str, Any] = {
@@ -124,6 +151,32 @@ class InferencePayload(BrokerModel):
         default=None, ge=1, description="Declared prompt size; avoids guessing when the caller knows."
     )
 
+    @field_validator("model")
+    @classmethod
+    def _require_model_identifier(cls, value: str) -> str:
+        """Reject work that cannot be matched to an execution model."""
+        if not value.strip():
+            raise ValueError("model must not be empty")
+        if value != value.strip():
+            raise ValueError("model must not have surrounding whitespace")
+        return value
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_boolean_token_hints(cls, data: Any) -> Any:
+        """Prevent boolean token hints from distorting routing decisions."""
+        if isinstance(data, dict):
+            for field_name in ("expected_output_tokens", "prompt_tokens_hint"):
+                if isinstance(data.get(field_name), bool):
+                    raise ValueError(f"{field_name} must be an integer, not boolean")
+                if (
+                    field_name in data
+                    and data.get(field_name) is not None
+                    and not isinstance(data.get(field_name), int)
+                ):
+                    raise ValueError(f"{field_name} must be an integer")
+        return data
+
     @field_validator("messages", mode="before")
     @classmethod
     def _coerce_messages(cls, value: Any) -> Any:
@@ -134,53 +187,69 @@ class InferencePayload(BrokerModel):
     @property
     def estimated_prompt_tokens(self) -> int:
         """Prompt size in tokens; uses the declared hint when available."""
-        if self.prompt_tokens_hint is not None:
-            return self.prompt_tokens_hint
-        chars = len(self.prompt) + len(self.system or "")
-        for message in self.messages:
+        payload = self._validated_payload()
+        if payload.prompt_tokens_hint is not None:
+            return payload.prompt_tokens_hint
+        chars = len(payload.prompt) + len(payload.system or "")
+        for message in payload.messages:
             chars += len(message.content)
         return max(1, chars // CHARS_PER_TOKEN)
 
     @property
     def estimated_output_tokens(self) -> int:
         """Generation size in tokens."""
-        if self.expected_output_tokens is not None:
-            return self.expected_output_tokens
-        if self.parameters.num_predict is not None:
-            return self.parameters.num_predict
+        payload = self._validated_payload()
+        if payload.expected_output_tokens is not None:
+            return payload.expected_output_tokens
+        if payload.parameters.num_predict is not None:
+            return payload.parameters.num_predict
         return DEFAULT_OUTPUT_TOKENS
 
     @property
     def prompt_hash(self) -> str:
         """sha256 of the canonical prompt text; guards snapshot reuse."""
-        parts = [self.prompt, self.system or ""]
-        parts.extend(f"{m.role}:{m.content}" for m in self.messages)
+        payload = self._validated_payload()
+        parts = [payload.prompt, payload.system or ""]
+        parts.extend(f"{m.role}:{m.content}" for m in payload.messages)
         return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
+
+    def _validated_payload(self) -> InferencePayload:
+        """Revalidate mutable nested state before routing or recovery reads it."""
+        return type(self).model_validate(dict(self))
 
     def to_engine_request(self, model_override: str | None = None) -> dict[str, Any]:
         """Render the payload as an Ollama ``/api/generate`` request body."""
+        payload = self._validated_payload()
         body: dict[str, Any] = {
-            "model": model_override or self.model,
-            "prompt": self.prompt,
+            "model": payload._request_model(model_override),
+            "prompt": payload.prompt,
             "stream": True,
-            "options": self.parameters.to_engine_params(),
+            "options": payload.parameters.to_engine_params(),
         }
-        if self.system:
-            body["system"] = self.system
+        if payload.system:
+            body["system"] = payload.system
         return body
 
     def to_chat_request(self, model_override: str | None = None) -> dict[str, Any]:
         """Render the payload as an Ollama ``/api/chat`` request body."""
-        messages = [m.model_dump() for m in self.messages]
-        if self.system:
-            messages.insert(0, {"role": "system", "content": self.system})
+        payload = self._validated_payload()
+        messages = [m.model_dump() for m in payload.messages]
+        if payload.system:
+            messages.insert(0, {"role": "system", "content": payload.system})
         body: dict[str, Any] = {
-            "model": model_override or self.model,
+            "model": payload._request_model(model_override),
             "messages": messages,
             "stream": True,
-            "options": self.parameters.to_engine_params(),
+            "options": payload.parameters.to_engine_params(),
         }
         return body
+
+    def _request_model(self, model_override: str | None) -> str:
+        """Keep node-selected model identities subject to the wire contract."""
+        model = self.model if model_override is None else model_override
+        if not isinstance(model, str) or not model.strip() or model != model.strip():
+            raise ValueError("model override must be a canonical non-empty string")
+        return model
 
 
 class InferenceJob(BrokerModel):
@@ -227,8 +296,17 @@ class InferenceJob(BrokerModel):
     def _derive_deadline(cls, data: Any) -> Any:
         """Fill ``deadline_at`` from the latency budget without touching the instance."""
         if isinstance(data, dict):
+            for field_name in ("max_acceptable_latency_ms", "attempt"):
+                if isinstance(data.get(field_name), bool):
+                    raise ValueError(f"{field_name} must be an integer, not boolean")
+                if field_name in data and not isinstance(data.get(field_name), int):
+                    raise ValueError(f"{field_name} must be an integer")
             latency = data.get("max_acceptable_latency_ms")
-            if latency is not None and data.get("deadline_at") is None:
+            if (
+                latency is not None
+                and 0 < latency <= 86_400_000
+                and data.get("deadline_at") is None
+            ):
                 submitted = data.get("submitted_at")
                 base = submitted if isinstance(submitted, datetime) else utcnow()
                 if base.tzinfo is None:
@@ -236,11 +314,39 @@ class InferenceJob(BrokerModel):
                 data = {**data, "deadline_at": base + timedelta(milliseconds=int(latency))}
         return data
 
+    @model_validator(mode="after")
+    def _require_supported_schema(self) -> InferenceJob:
+        """Prevent replay of a job encoded by an incompatible contract."""
+        if self.schema_version != SCHEMA_VERSION:
+            raise ValueError(f"unsupported schema_version: {self.schema_version!r}")
+        return self
+
     @field_validator("submitted_at", "deadline_at", "not_before", mode="after")
     @classmethod
     def _require_tz(cls, value: datetime | None) -> datetime | None:
         if value is not None and value.tzinfo is None:
             return value.replace(tzinfo=UTC)
+        return value
+
+    @field_validator("job_id", "kv_cache_state_id", "assigned_node_id", "caller")
+    @classmethod
+    def _require_canonical_identity(cls, value: str | None) -> str | None:
+        """Keep deduplication and recovery lookups keyed by stable identities."""
+        if value is not None:
+            if not value.strip():
+                raise ValueError("identity must not be empty")
+            if value != value.strip():
+                raise ValueError("identity must not have surrounding whitespace")
+        return value
+
+    @field_validator("tags")
+    @classmethod
+    def _require_canonical_tags(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        """Keep metadata tags stable for filtering and replay."""
+        if any(not tag.strip() or tag != tag.strip() for tag in value):
+            raise ValueError("tags must contain canonical non-empty strings")
+        if len(set(value)) != len(value):
+            raise ValueError("tags must not contain duplicates")
         return value
 
     @property
@@ -250,6 +356,8 @@ class InferenceJob(BrokerModel):
 
     def remaining_latency_ms(self, now: datetime | None = None) -> int:
         """Milliseconds left in the latency budget (may be negative)."""
+        if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+            raise ValueError("job timestamp must be timezone-aware")
         if self.deadline_at is None:
             return self.max_acceptable_latency_ms
         current = now or utcnow()

@@ -1,11 +1,11 @@
 # How should the Horizon Broker be built from here? {#plan}
 
-The next release is a correctness release, not a feature release: **close the defects that make the behaviour and the documentation disagree** before taking on more work.
+The next release is a correctness release, not a feature release: **close the defects that make the behaviour and the documentation disagree** before taking on more work. The Phase 0 defects below are now implemented; the remaining plan focuses on measured throughput and multi-broker control.
 
-- A quarantined node never returns to the pool, so one failure removes a machine for the life of the process.
-- Three terminal paths never resolve the waiting HTTP client, so a failed job hangs its caller until the timeout.
-- The completion counter is exported but never incremented, so the metrics cannot show the thing they exist to show.
-- The Flex batch is N single-prompt requests, so the throughput promise is not earned yet.
+- A quarantined node returns to the pool after its configured cooling-off period.
+- Terminal completion, failure, cancellation and expiry resolve waiting HTTP clients.
+- Completion and failure counters, quantiles and batch metrics are exported from observed lifecycle events.
+- The Flex planner groups work, while real multi-prompt admission is limited to opt-in agent-container nodes; direct Ollama remains one request per prompt.
 
 @answer scope="the plan from v0.3 to v1.0 · one broker, one host, one fleet today"
 @meta locale=en style=editorial repo_url=https://github.com/hamanakam1/horizon-broker repo_revision=76e545fd9e6ed8ce58dc74916f245979154941da
@@ -52,8 +52,8 @@ The next release is a correctness release, not a feature release: **close the de
 | Proof | v1.0 | Support, runbooks, signed releases | Seven days of fault injection |
 
 @facts id=numbers
-| Tests in the suite | 131 |
-| Modules in the package | 31 |
+| Tests in the suite | 275 |
+| Modules in the package | 42 |
 | Diagram types published | 10 |
 | Recovery budget | 30 s |
 
@@ -66,8 +66,8 @@ The next release is a correctness release, not a feature release: **close the de
 
 ## What to do first {#checklist}
 
-- [ ] Write the failing test for the quarantine that never expires, then fix the check.
-- [ ] Resolve the waiting future on the failure, cancellation and expiry paths.
-- [ ] Increment the completion counter and declare the recovery histogram.
-- [ ] Make the Flex path call the engine once per batch, not once per prompt.
+- [x] Write the failing test for quarantine expiry, then fix the check.
+- [x] Resolve the waiting future on failure, cancellation and expiry paths.
+- [x] Increment lifecycle counters and declare recovery quantiles.
+- [ ] Make direct-engine Flex execution call a real multi-prompt endpoint; opt-in agent containers already receive one batch assignment.
 - [ ] Publish a week of soak numbers before promising a throughput gain.

@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from horizon_broker.contracts.jobs import InferenceJob, JobState, PriorityTier
+from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState, PriorityTier
 from horizon_broker.scheduler.window import (
     FlexBatch,
     WindowPolicy,
@@ -103,6 +103,7 @@ class JobPriorityQueue:
         """
         self._remove_locked(job.job_id)
         job.state = JobState.QUEUED
+        job.phase = ExecutionPhase.MONOLITHIC
         job.assigned_node_id = None
         job.tags = tuple(dict.fromkeys(job.tags + (f"recovered:{reason}",)))
         self._by_id[job.job_id] = job
@@ -134,13 +135,24 @@ class JobPriorityQueue:
         heapq.heapify(self._interactive)
         self._flex = [entry for entry in self._flex if entry.job.job_id != job_id]
         heapq.heapify(self._flex)
-        pending = self._flex_by_model.get(job.payload.model)
-        if pending is not None:
-            self._flex_by_model[job.payload.model] = [
+        pending_model = next(
+            (
+                model
+                for model, pending in self._flex_by_model.items()
+                if any(item.job_id == job_id for item in pending)
+            ),
+            None,
+        )
+        if pending_model is not None:
+            pending = self._flex_by_model[pending_model]
+            self._flex_by_model[pending_model] = [
                 item for item in pending if item.job_id != job_id
             ]
-            if not self._flex_by_model[job.payload.model]:
-                self._flex_by_model.pop(job.payload.model, None)
+            if not self._flex_by_model[pending_model]:
+                self._flex_by_model.pop(pending_model, None)
+                # A cancelled or re-dispatched final member must not leave a
+                # stale deadline behind for the next window for this model.
+                self._windows.pop(pending_model, None)
         return job
 
     # -- consumption --------------------------------------------------------
@@ -190,6 +202,7 @@ class JobPriorityQueue:
         """
         if not power_ok:
             return []
+        self._reindex_flex_models()
         batches: list[FlexBatch] = []
         for model in list(self._flex_by_model.keys()):
             pending = self._flex_by_model.get(model, [])
@@ -227,6 +240,19 @@ class JobPriorityQueue:
                 )
             )
         return batches
+
+    def _reindex_flex_models(self) -> None:
+        """Repair model buckets when a shared job payload changes after enqueue."""
+        for model, pending in list(self._flex_by_model.items()):
+            for job in list(pending):
+                current_model = job.payload.model
+                if current_model == model:
+                    continue
+                pending.remove(job)
+                self._flex_by_model[current_model].append(job)
+            if not pending:
+                self._flex_by_model.pop(model, None)
+                self._windows.pop(model, None)
 
     # -- introspection ------------------------------------------------------
 

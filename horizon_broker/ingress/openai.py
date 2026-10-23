@@ -72,22 +72,50 @@ def _parameters_from(body: dict[str, Any]) -> SamplingParams:
     if isinstance(stop, str):
         stop_values = (stop,)
     elif isinstance(stop, list):
-        stop_values = tuple(str(item) for item in stop)
+        if not all(isinstance(item, str) for item in stop):
+            raise OpenAITranslationError("stop values must be strings")
+        stop_values = tuple(stop)
     else:
         stop_values = ()
+    for field_name in ("max_tokens", "max_completion_tokens"):
+        value = body.get(field_name)
+        if (
+            value is not None
+            and not isinstance(value, bool)
+            and (not isinstance(value, int) or value <= 0)
+        ):
+            raise OpenAITranslationError(f"{field_name} must be a positive integer")
     max_tokens = body.get("max_tokens")
     if max_tokens is None:
         max_tokens = body.get("max_completion_tokens")
-    num_predict = int(max_tokens) if isinstance(max_tokens, int) and max_tokens > 0 else None
-    seed = body.get("seed")
-    return SamplingParams(
-        temperature=float(body.get("temperature", 0.8)),
-        top_p=float(body.get("top_p", 0.95)),
-        top_k=int(body.get("top_k", 40)),
-        num_predict=num_predict,
-        seed=int(seed) if isinstance(seed, int) else None,
-        stop=stop_values,
+    num_predict = (
+        int(max_tokens)
+        if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0
+        else None
     )
+    try:
+        temperature = body.get("temperature", 0.8)
+        top_p = body.get("top_p", 0.95)
+        top_k = body.get("top_k", 40)
+        seed = body.get("seed")
+        if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+            raise ValueError("temperature must be numeric")
+        if not isinstance(top_p, (int, float)) or isinstance(top_p, bool):
+            raise ValueError("top_p must be numeric")
+        if not isinstance(top_k, int) or isinstance(top_k, bool):
+            raise ValueError("top_k must be an integer")
+        if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
+            raise ValueError("seed must be an integer")
+        return SamplingParams(
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            num_predict=num_predict,
+            seed=seed,
+            stop=stop_values,
+        )
+    except (TypeError, ValueError) as exc:
+        raise OpenAITranslationError("sampling parameters are invalid") from exc
 
 
 def chat_request_to_job(
@@ -102,6 +130,8 @@ def chat_request_to_job(
     model = body.get("model")
     if not isinstance(model, str) or not model:
         model = DEFAULT_MODEL
+    elif model != model.strip():
+        raise OpenAITranslationError("model must not have surrounding whitespace")
 
     # The system prompt travels in ``payload.system``, which the chat
     # request inserts at the front. Leaving it in the message list as well
@@ -117,25 +147,45 @@ def chat_request_to_job(
         parameters=_parameters_from(body),
         expected_output_tokens=body.get("max_tokens")
         if isinstance(body.get("max_tokens"), int)
+        and not isinstance(body.get("max_tokens"), bool)
         else None,
     )
 
     tier = body.get("horizon_priority_tier")
     latency = body.get("horizon_max_acceptable_latency_ms")
-    if tier not in (PriorityTier.INTERACTIVE.value, PriorityTier.FLEX.value):
+    if tier is not None and tier not in (PriorityTier.INTERACTIVE.value, PriorityTier.FLEX.value):
+        raise OpenAITranslationError("horizon_priority_tier must be interactive or flex")
+    if (
+        latency is not None
+        and not isinstance(latency, bool)
+        and (not isinstance(latency, int) or latency <= 0)
+    ):
+        raise OpenAITranslationError(
+            "horizon_max_acceptable_latency_ms must be a positive integer"
+        )
+    if tier is None:
         tier = (
             PriorityTier.FLEX.value
-            if isinstance(latency, int) and latency > interactive_threshold_ms
+            if (
+                isinstance(latency, int)
+                and not isinstance(latency, bool)
+                and latency > interactive_threshold_ms
+            )
             else PriorityTier.INTERACTIVE.value
         )
-    if not isinstance(latency, int) or latency <= 0:
+    if not isinstance(latency, int) or isinstance(latency, bool) or latency <= 0:
         latency = DEFAULT_LATENCY_MS
+    caller = body.get("horizon_caller", "openai")
+    if not isinstance(caller, str) or not caller.strip():
+        caller = "openai"
+    elif caller != caller.strip():
+        raise OpenAITranslationError("caller must not have surrounding whitespace")
 
     return InferenceJob(
         priority_tier=PriorityTier(tier),
         payload=payload,
         max_acceptable_latency_ms=latency,
-        caller=body.get("horizon_caller", "openai"),
+        caller=caller,
     )
 
 
@@ -185,7 +235,7 @@ def chunk_object(
 
 def sse(payload: dict[str, Any]) -> bytes:
     """Render one server-sent event."""
-    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+    return f"data: {json.dumps(payload, ensure_ascii=False, allow_nan=False)}\n\n".encode()
 
 
 DONE = b"data: [DONE]\n\n"

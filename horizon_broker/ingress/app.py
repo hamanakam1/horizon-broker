@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+import math
+from typing import Any, NoReturn
 
 from aiohttp import web
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from pydantic import ValidationError
 from horizon_broker.config import BrokerConfig
 from horizon_broker.contracts.errors import (
     BrokerDrainingError,
+    InvalidSubmissionError,
     QueueFullError,
     UnknownJobError,
 )
@@ -35,14 +37,21 @@ from horizon_broker.scheduler.engine import TERMINAL_STATES, BrokerEngine
 
 LOGGER = logging.getLogger(__name__)
 
-JSON = web.json_response
-
 TERMINAL_STATE_NAMES = {state.value for state in TERMINAL_STATES}
 MAX_JOB_LIST_LIMIT = 1_000
 DEFAULT_JOB_LIST_LIMIT = 100
 
 ENGINE_KEY: web.AppKey[BrokerEngine] = web.AppKey("engine")
 CONFIG_KEY: web.AppKey[BrokerConfig] = web.AppKey("config")
+
+
+def JSON(data: Any = None, **kwargs: Any) -> web.Response:
+    """Render API responses with standards-compliant JSON numbers."""
+    kwargs.setdefault(
+        "dumps",
+        lambda value: json.dumps(value, ensure_ascii=False, allow_nan=False),
+    )
+    return web.json_response(data, **kwargs)
 
 
 def _engine(request: web.Request) -> BrokerEngine:
@@ -53,6 +62,29 @@ def _config(request: web.Request) -> BrokerConfig:
     return request.app[CONFIG_KEY]
 
 
+def _reject_json_constant(value: str) -> NoReturn:
+    """Reject Python-specific non-standard JSON numeric constants."""
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
+async def _request_json(request: web.Request) -> Any:
+    """Decode request bodies without admitting non-standard JSON numbers."""
+    return json.loads(await request.text(), parse_constant=_reject_json_constant)
+
+
+def _job_list_limit(raw: str) -> int:
+    """Parse a bounded decimal page size without unbounded integer work."""
+    if not raw or len(raw) > 20 or not raw.isascii() or not raw.isdecimal():
+        return DEFAULT_JOB_LIST_LIMIT
+    try:
+        parsed = int(raw, 10)
+    except (TypeError, ValueError):
+        return DEFAULT_JOB_LIST_LIMIT
+    if parsed < 0:
+        return DEFAULT_JOB_LIST_LIMIT
+    return min(parsed, MAX_JOB_LIST_LIMIT)
+
+
 def job_from_payload(data: dict[str, Any], config: BrokerConfig) -> InferenceJob:
     """Build an :class:`InferenceJob` from an ingress body.
 
@@ -61,8 +93,10 @@ def job_from_payload(data: dict[str, Any], config: BrokerConfig) -> InferenceJob
     ``scheduling.interactive_latency_threshold_ms`` is sleep-time compute.
     """
     body = dict(data)
+    latency = body.get("max_acceptable_latency_ms")
+    if isinstance(latency, bool):
+        body["max_acceptable_latency_ms"] = "invalid"
     if "priority_tier" not in body:
-        latency = body.get("max_acceptable_latency_ms")
         if isinstance(latency, int):
             threshold = config.scheduling.interactive_latency_threshold_ms
             body["priority_tier"] = (
@@ -78,7 +112,7 @@ async def handle_submit(request: web.Request) -> web.Response:
     engine = _engine(request)
     config = _config(request)
     try:
-        data = await request.json()
+        data = await _request_json(request)
     except Exception:  # noqa: BLE001
         return JSON({"error": "body must be valid JSON"}, status=400)
     if not isinstance(data, dict):
@@ -91,6 +125,8 @@ async def handle_submit(request: web.Request) -> web.Response:
         )
     try:
         await engine.submit(job)
+    except InvalidSubmissionError as exc:
+        return JSON({"error": "invalid job", "details": [str(exc)]}, status=422)
     except QueueFullError as exc:
         LOGGER.warning("refusing job %s: %s", job.job_id, exc)
         return JSON({"error": "queue full", "detail": str(exc)}, status=429)
@@ -126,10 +162,7 @@ async def handle_jobs(request: web.Request) -> web.Response:
     small instead of shipping the whole (bounded) store.
     """
     engine = _engine(request)
-    raw = request.query.get("limit", "")
-    limit = DEFAULT_JOB_LIST_LIMIT
-    if raw.isdigit():
-        limit = min(int(raw), MAX_JOB_LIST_LIMIT)
+    limit = _job_list_limit(request.query.get("limit", ""))
     return JSON(engine.list_jobs(limit))
 
 
@@ -167,7 +200,7 @@ async def handle_heartbeat(request: web.Request) -> web.Response:
     engine = _engine(request)
     node_id = request.match_info["node_id"]
     try:
-        data = await request.json()
+        data = await _request_json(request)
     except Exception:  # noqa: BLE001
         return JSON({"error": "body must be valid JSON"}, status=400)
     if not isinstance(data, dict):
@@ -213,9 +246,11 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     engine = _engine(request)
     config = _config(request)
     try:
-        body = await request.json()
+        body = await _request_json(request)
     except Exception:  # noqa: BLE001
         return JSON({"error": {"message": "body must be valid JSON"}}, status=400)
+    if not isinstance(body, dict):
+        return JSON({"error": {"message": "body must be a JSON object"}}, status=400)
     try:
         job = chat_request_to_job(
             body,
@@ -224,8 +259,18 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     except OpenAITranslationError as exc:
         return JSON({"error": {"message": str(exc)}}, status=422)
 
+    stream = body.get("stream", False)
+    if not isinstance(stream, bool):
+        return JSON({"error": {"message": "stream must be a boolean"}}, status=422)
     timeout = body.get("horizon_timeout_seconds")
-    wait_for = float(timeout) if isinstance(timeout, (int, float)) and timeout > 0 else None
+    wait_for: float | None = None
+    if isinstance(timeout, (int, float)) and not isinstance(timeout, bool):
+        try:
+            converted_timeout = float(timeout)
+        except (OverflowError, ValueError):
+            converted_timeout = None
+        if converted_timeout is not None and math.isfinite(converted_timeout) and converted_timeout > 0:
+            wait_for = converted_timeout
     try:
         await engine.submit(job)
     except QueueFullError as exc:
@@ -233,7 +278,7 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     except BrokerDrainingError as exc:
         return JSON({"error": {"message": str(exc), "type": "broker_draining"}}, status=503)
 
-    if body.get("stream"):
+    if stream:
         return await _stream_completion(request, engine, job, wait_for)
 
     text = await engine.wait_for_result(job.job_id, timeout=wait_for)
@@ -256,7 +301,7 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
     if measured is not None:
         # The engine counted the tokens; an estimate would misreport the cost.
         prompt_tokens, completion_tokens = measured
-    if body.get("stream"):
+    if stream:
         response = web.StreamResponse(
             status=200, headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"}
         )
@@ -295,10 +340,10 @@ async def _stream_completion(
         status=200,
         headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"},
     )
-    await response.prepare(request)
-    await response.write(sse(chunk_object(job, delta={"role": "assistant", "content": ""})))
-    timed_out = False
     try:
+        await response.prepare(request)
+        await response.write(sse(chunk_object(job, delta={"role": "assistant", "content": ""})))
+        timed_out = False
         while True:
             try:
                 piece = await asyncio.wait_for(queue.get(), timeout=timeout)
@@ -308,30 +353,30 @@ async def _stream_completion(
             if piece is None:
                 break
             await response.write(sse(chunk_object(job, delta={"content": piece})))
+
+        if timed_out:
+            await response.write(
+                sse({"error": {"message": "the job did not finish in time", "type": "timeout"}})
+            )
+        else:
+            status = engine.status(job.job_id) or {}
+            if status.get("state") not in (None, "completed"):
+                await response.write(
+                    sse(
+                        {
+                            "error": {
+                                "message": status.get("error") or "the job did not produce a result",
+                                "type": "job_failed",
+                            }
+                        }
+                    )
+                )
+            await response.write(sse(chunk_object(job, delta={}, finish_reason="stop")))
+        await response.write(DONE)
+        await response.write_eof()
+        return response
     finally:
         engine.unsubscribe(job.job_id, queue)
-
-    if timed_out:
-        await response.write(
-            sse({"error": {"message": "the job did not finish in time", "type": "timeout"}})
-        )
-    else:
-        status = engine.status(job.job_id) or {}
-        if status.get("state") not in (None, "completed"):
-            await response.write(
-                sse(
-                    {
-                        "error": {
-                            "message": status.get("error") or "the job did not produce a result",
-                            "type": "job_failed",
-                        }
-                    }
-                )
-            )
-        await response.write(sse(chunk_object(job, delta={}, finish_reason="stop")))
-    await response.write(DONE)
-    await response.write_eof()
-    return response
 
 
 async def handle_models(request: web.Request) -> web.Response:

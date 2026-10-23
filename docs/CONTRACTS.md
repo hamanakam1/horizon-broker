@@ -58,6 +58,11 @@ The rest of the envelope:
 `deadline_at` is derived from `max_acceptable_latency_ms` when it is not
 supplied. `state` moves through `queued → windowing → dispatched → running →
 completed`, with `recovering` and `failed` as the fault branches.
+`assigned_node_id` identifies the node that currently owns dispatched work and
+is cleared whenever work returns to a queue or recovery lane. For terminal
+jobs, the value is retained as execution provenance; it is not an active
+reservation. `phase` describes active execution and returns to `monolithic`
+when a job is re-queued or restored after a broker restart.
 
 ### Token estimation
 
@@ -109,9 +114,22 @@ Notes:
 * `health` is `healthy`, `degraded`, `draining`, `suspect`, `lost` or
   `offline`. `draining` is a polite announcement that the node is about to
   lose power; the broker migrates the work immediately.
+* `last_heartbeat_at` and `quarantined_until`, when present, must be
+  timezone-aware because watchdog and placement compare them with UTC now.
+* `endpoint` and `ollama_url` must be absolute HTTP(S) URLs, while
+  `agent_ws_url` must be an absolute WS(S) URL. All three reject embedded
+  credentials and ports outside `1–65535` before the node can enter routing.
 * `available_vram_bytes` above `total_vram_bytes` (and a batch size above the
   maximum) is clamped on validation rather than rejected — a node reporting
   bad numbers should not take the fleet down.
+* `current_batch_size` is the node's total reported occupancy, including work
+  not owned by this broker. `assigned_job_ids` is only this broker's ownership
+  ledger; releasing one of those jobs must not erase the reported occupancy
+  baseline.
+* `tokens_per_second` and `power_headroom`, when present, must be finite
+  numbers; non-finite telemetry is rejected before routing.
+* `metadata` must contain only JSON-safe values so capability diagnostics and
+  wire responses cannot fail on arbitrary objects or non-standard numbers.
 
 ## `FaultRecoverySnapshot`
 
@@ -147,6 +165,11 @@ The payload committed to EdgeRecord when a job is interrupted.
 ```
 
 * `step` is the decode iteration reached when the checkpoint was taken.
+* `step`, `resume_point.decode_step`, and
+  `resume_point.generated_token_count` must be identical; the broker rejects
+  snapshots with ambiguous progress coordinates.
+* `partial_tokens` may be truncated for storage, but their count cannot exceed
+  the recorded decode step.
 * `partial_tokens` are the tokens already emitted, in order.
 * `resume_point.kv_cache_ref` is the same identifier surfaced as
   `InferenceJob.kv_cache_state_id`.
@@ -155,6 +178,8 @@ The payload committed to EdgeRecord when a job is interrupted.
   recovered output would be incoherent.
 * `content_hash` covers the canonical payload and is verified on read; a
   record that fails verification is ignored.
+* `created_at` must be timezone-aware, so recovery timestamps remain
+  comparable across machines.
 
 ## `LedgerRecord` / `LedgerCommitReceipt`
 
@@ -162,7 +187,9 @@ The payload committed to EdgeRecord when a job is interrupted.
 
 The envelope the broker writes to EdgeRecord. `LedgerRecord.payload` holds the
 snapshot body; `content_hash` guards the payload; `LedgerCommitReceipt` is the
-proof of a durable commit.
+proof of a durable commit. `LedgerRecord.created_at` and
+`LedgerCommitReceipt.committed_at` must be timezone-aware, matching the
+recovery snapshot timestamp contract.
 
 ## The OpenAI-compatible surface
 
@@ -217,6 +244,7 @@ Frames exchanged over the node WebSocket:
 | `ping` | broker → node | liveness probe |
 | `heartbeat` | node → broker | capability snapshot, power headroom |
 | `assign` | broker → node | the job envelope, `phase` (`prefill`, `decode`, `monolithic`), `resume_point`, `kv_cache_state_id` |
+| `batch_assign` | broker → node | `jobs`: one or more compatible `assign` payloads; only nodes with `metadata.supports_batch=true` may receive it |
 | `progress` | node → broker | `job_id`, `tokens_generated`, optional text |
 | `checkpoint` | node → broker | `job_id`, `tokens_generated`, `partial_tokens`, `kv_cache_ref` |
 | `complete` | node → broker | `job_id`, `text`, and for a prefill phase `kv_cache_ref` |
@@ -226,6 +254,12 @@ Frames exchanged over the node WebSocket:
 A frame without a `job_id` is attributed to the node's only active job; when
 the node runs more than one job the frame is ignored and logged, because
 guessing would corrupt the wrong job.
+
+`batch_assign` is an admission optimization, not a new recovery identity:
+each item retains its own `job_id`, phase, resume point and terminal lifecycle.
+The broker sends one batch only when all members target the same node, use the
+same model, have matching routing decisions, and fit the node's remaining
+batch capacity. Direct Ollama nodes continue to receive individual requests.
 
 ## The EdgeRecord HTTP port
 
@@ -237,13 +271,21 @@ POST {base_url}{ledger.commit_path}
      body:    {"document_id", "payload", "content_hash", "tags"}
      reply:   {"document_id", "commit_url", "content_hash"}
 
-GET  {base_url}{ledger.query_path}?job_id=...&limit=1
-     reply:   {"records": [{"document_id", "payload", "content_hash"}]}
+GET  {base_url}{ledger.query_path}?job_id=...&owner_id=...&limit=1
+     reply:   {"records": [{"document_id", "payload", "content_hash", "tags"}]}
 ```
 
 Defaults: `commit_path=/collections/{collection}/records`,
 `query_path=/collections/{collection}/records`,
-`collection=horizon_broker.snapshots`.
+`collection=horizon_broker.snapshots`, and `owner_id=horizon-broker`.
+Both paths must be absolute path templates with exactly one `{collection}`
+placeholder and no query or fragment component; the collection value is
+percent-encoded when the request URL is built. This keeps route interpolation
+deterministic and prevents collection delimiters from changing the path.
+Committed recovery records also carry the `broker:<owner_id>` tag, so a shared
+EdgeRecord collection can enforce the same ownership boundary on writes and
+reads. A returned record must carry the configured owner tag; a missing or
+conflicting owner is rejected as unavailable recovery state.
 
 Transient failures (network errors and 5xx) are retried with a growing
 backoff (`ledger.max_retries`, `ledger.retry_backoff_seconds`); a 4xx is
@@ -251,7 +293,23 @@ permanent and fails immediately, because retrying a rejected document only
 delays the error. When `EDGERECORD_TOKEN` (configurable through
 `ledger.auth_token_env`) is set, it is sent as
 `Authorization: Bearer <token>`; the value is read per request so it can be
-rotated without restarting the broker.
+rotated without restarting the broker. Every request applies
+`ledger.timeout_seconds` independently, including when the broker injects its
+shared HTTP session, and redirects are rejected rather than followed.
+
+The adapter treats a successful response as untrusted input. Commit replies
+must be valid standards-compliant JSON objects with a non-empty `document_id`
+matching the submitted record; an optional `content_hash` must also match
+when present. An optional `commit_url` must be an absolute HTTP(S) URL without
+embedded credentials or surrounding whitespace. Query replies may use an
+object containing a `records`, `items`, `results`, or `documents` list, a
+direct record object, or a direct list of records. The selected record must
+have a non-empty `document_id`, a mapping `payload`, and `payload.job_id` equal
+to the requested job. These checks prevent a malformed or cross-job ledger
+response from being used as recovery state. When a query record includes
+`content_hash`, it must also match the canonical hash of the returned payload;
+the broker ultimately requires a valid content hash before using the record
+for recovery.
 
 Any transport failure raises `LedgerUnavailableError`, which the snapshot
 store answers by reading the local journal instead.

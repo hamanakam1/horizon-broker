@@ -26,6 +26,7 @@ from horizon_broker.contracts.errors import LedgerUnavailableError
 from horizon_broker.contracts.jobs import InferenceJob
 from horizon_broker.contracts.ledger import LedgerCommitReceipt, LedgerRecord
 from horizon_broker.contracts.recovery import FaultRecoverySnapshot
+from horizon_broker.observability.metrics import MetricsRegistry
 from horizon_broker.recovery.journal import LocalJournal
 from horizon_broker.recovery.ledger import EdgeRecordClient
 
@@ -47,6 +48,7 @@ class SnapshotStore:
         journal: LocalJournal,
         ledger_config: LedgerConfig | None = None,
         journal_max_bytes: int = 64 * 1024 * 1024,
+        metrics: MetricsRegistry | None = None,
     ) -> None:
         self.ledger = ledger
         self.journal = journal
@@ -55,6 +57,7 @@ class SnapshotStore:
             self.ledger_config.collection if self.ledger_config else "horizon_broker.snapshots"
         )
         self.journal_max_bytes = journal_max_bytes
+        self.metrics = metrics or MetricsRegistry()
         self._commits = 0
 
     async def commit(self, snapshot: FaultRecoverySnapshot) -> LedgerCommitReceipt | None:
@@ -82,6 +85,7 @@ class SnapshotStore:
         try:
             receipt = await self.ledger.commit(record)
         except LedgerUnavailableError as exc:
+            self.metrics.incr("horizon_ledger_fallback_total", reason="commit")
             LOGGER.warning(
                 "ledger commit failed, snapshot kept in local journal only: %s", exc
             )
@@ -95,23 +99,51 @@ class SnapshotStore:
             try:
                 record = await self.ledger.latest_for_job(job_id)
             except LedgerUnavailableError as exc:
+                self.metrics.incr("horizon_ledger_fallback_total", reason="query")
                 LOGGER.warning("ledger query failed, falling back to journal: %s", exc)
             else:
                 snapshot = self._snapshot_from_record(record) if record else None
                 if snapshot is not None:
-                    return snapshot
+                    if snapshot.job_id == job_id:
+                        return snapshot
+                    LOGGER.warning(
+                        "ignoring ledger snapshot %s with mismatched job id for %s",
+                        snapshot.snapshot_id,
+                        job_id,
+                    )
+                    snapshot = None
+                if record is not None:
+                    self.metrics.incr("horizon_ledger_fallback_total", reason="invalid")
 
-        raw = await self.journal.latest(SNAPSHOT_KIND, job_id)
+        try:
+            raw = await self.journal.latest(SNAPSHOT_KIND, job_id)
+        except OSError as exc:
+            # A journal outage must degrade to a clean restart from the
+            # request envelope; recovery must not strand the job in-flight.
+            LOGGER.warning("could not read the local snapshot journal for %s: %s", job_id, exc)
+            return None
         if not raw:
             return None
         body = raw.get("snapshot")
         if not isinstance(body, dict):
             return None
         try:
-            return FaultRecoverySnapshot.model_validate(body)
+            snapshot = FaultRecoverySnapshot.model_validate(body)
         except Exception as exc:  # noqa: BLE001 - a corrupt journal line must not kill recovery
             LOGGER.warning("ignoring corrupt snapshot for job %s: %s", job_id, exc)
             return None
+        if snapshot.job_id != job_id:
+            LOGGER.warning(
+                "ignoring snapshot %s with mismatched job id for %s",
+                snapshot.snapshot_id,
+                job_id,
+            )
+            return None
+        stored_hash = body.get("content_hash")
+        if not isinstance(stored_hash, str) or stored_hash != snapshot.compute_content_hash():
+            LOGGER.warning("ignoring snapshot %s with an invalid content hash", snapshot.snapshot_id)
+            return None
+        return snapshot
 
     async def _maybe_trim(self) -> None:
         """Keep the journal from growing without bound."""
@@ -148,13 +180,21 @@ class SnapshotStore:
                 newest[job_id] = record
         jobs: list[InferenceJob] = []
         for record in newest.values():
+            record_job_id = record.get("job_id")
             body = record.get("job")
-            if not isinstance(body, dict):
+            if not isinstance(record_job_id, str) or not isinstance(body, dict):
                 continue
             try:
-                jobs.append(InferenceJob.model_validate(body))
+                job = InferenceJob.model_validate(body)
             except Exception as exc:  # noqa: BLE001 - a corrupt line must not block a replay
                 LOGGER.warning("ignoring corrupt journal payload: %s", exc)
+                continue
+            if job.job_id != record_job_id:
+                LOGGER.warning(
+                    "ignoring journal payload with mismatched job id for %s", record_job_id
+                )
+                continue
+            jobs.append(job)
         return jobs
 
     async def load_job_payload(self, job_id: str) -> InferenceJob | None:
@@ -166,23 +206,39 @@ class SnapshotStore:
         if not isinstance(body, dict):
             return None
         try:
-            return InferenceJob.model_validate(body)
+            job = InferenceJob.model_validate(body)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("ignoring corrupt journal payload for job %s: %s", job_id, exc)
             return None
+        if job.job_id != job_id:
+            LOGGER.warning("ignoring journal payload with mismatched job id for %s", job_id)
+            return None
+        return job
 
     @staticmethod
     def _snapshot_from_record(record: LedgerRecord) -> FaultRecoverySnapshot | None:
         """Validate a ledger record into a snapshot, rejecting tampered payloads."""
         if not record.payload:
             return None
+        if not record.content_hash or not record.verify():
+            LOGGER.warning(
+                "ledger record %s failed envelope hash verification", record.document_id
+            )
+            return None
         try:
             snapshot = FaultRecoverySnapshot.model_validate(record.payload)
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("ledger record %s is not a valid snapshot: %s", record.document_id, exc)
             return None
+        if record.document_id != snapshot.snapshot_id:
+            LOGGER.warning(
+                "ledger record %s has snapshot identity %s",
+                record.document_id,
+                snapshot.snapshot_id,
+            )
+            return None
         stored_hash = record.payload.get("content_hash")
-        if stored_hash and stored_hash != snapshot.compute_content_hash():
+        if not isinstance(stored_hash, str) or stored_hash != snapshot.compute_content_hash():
             LOGGER.warning(
                 "ledger record %s failed content hash verification", record.document_id
             )

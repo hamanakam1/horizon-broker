@@ -115,9 +115,12 @@ the weight load. When the whole mesh is idle, holding a single prompt back
 adds latency for no gain — so the batch goes out early. This is the
 "waits until the M3 Max is idle" rule from the design, not an afterthought.
 
-The payoff is the MFU argument. Streaming weights out of unified memory once
-for a batch of 16 costs the same as streaming them once for a single prompt;
-only the per-token compute scales with batch size.
+The payoff is the MFU argument when the selected node implements the
+`batch_assign` protocol: streaming weights out of unified memory once for a
+batch of 16 costs the same as streaming them once for a single prompt, while
+only the per-token compute scales with batch size. Direct Ollama nodes do not
+expose that endpoint, so their Flex group is dispatched as individual
+requests; the planner's grouping alone is not throughput evidence.
 
 ## PD-DAG routing
 
@@ -192,7 +195,7 @@ elsewhere within 30 seconds.
  t+0.0s   node dies (thermal kill, power loss, cable)
  t+0.0s   socket closes, or the heartbeat goes silent
  t+6.0s   watchdog declares the node LOST, quarantines it
-          (2 s heartbeat interval, 3 missed beats)
+          (the later of the 6 s silence timeout or 3 missed 2 s beats)
  t+6.0s   supervisor asks the recovery coordinator for every job on the node
  t+6.1s   coordinator loads the newest FaultRecoverySnapshot from EdgeRecord
           (falls back to the local journal when the ledger is down)
@@ -240,8 +243,9 @@ node   ──complete──▶ broker
 node   ──draining──▶ broker   (low voltage: migrate the work now)
 ```
 
-Any socket close, or silence longer than `heartbeat.timeout_seconds`, is a
-node loss.
+Any socket close is a node loss. For heartbeat-based detection, the watchdog
+waits until both the silence timeout and the configured missed-beat threshold
+are satisfied; the effective threshold is the later of those two limits.
 
 ### Nodes without a control channel
 
@@ -265,6 +269,10 @@ The recovery coordinator is deliberately conservative:
   time and dispatch it to the node that just failed;
 * the failed node is added to the job's exclusion set, so attempt N+1 never
   lands on the machine that killed attempt N;
+* duplicate recovery notifications for one attempt are serialized and fenced,
+  so the same snapshot cannot be dispatched twice;
+* cancellation during recovery preserves the cancellation signal while
+  returning the incremented attempt to the queue for a later retry;
 * the retry budget is finite (`recovery.max_attempts`). After that the job
   fails loudly instead of looping forever.
 
