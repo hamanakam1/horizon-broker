@@ -545,7 +545,11 @@ class JobSupervisor:
                 self._notify_finished(job)
                 continue
             try:
-                await self._recover(job, node_id, reason)
+                outcome = await self._recover(job, node_id, reason)
+                if not outcome.dispatched and job.state is JobState.FAILED:
+                    # Exhausting the retry budget returns normally; callers and
+                    # the journal still need the same terminal notification.
+                    self._notify_finished(job)
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("recovery failed for job %s: %s", job.job_id, exc)
                 job.state = JobState.FAILED
