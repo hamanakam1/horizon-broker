@@ -4,7 +4,7 @@ When a node dies mid-inference the coordinator must, inside a bounded budget
 (30 seconds by default):
 
 1. load the newest :class:`FaultRecoverySnapshot` for the job,
-2. validate it against the job (prompt hash + model must match),
+2. validate it against the job (job ID, prompt hash and model must match),
 3. re-queue the job with the recovered resume state,
 4. dispatch it to a *different* node.
 
@@ -126,13 +126,21 @@ class RecoveryCoordinator:
         snapshot = await self.store.latest_for_job(job.job_id)
         resumed = False
         if snapshot is not None:
-            if snapshot.resume_point.prompt_hash != job.payload.prompt_hash:
+            if snapshot.job_id != job.job_id:
+                LOGGER.warning(
+                    "discarding snapshot %s: job id mismatch for job %s",
+                    snapshot.snapshot_id,
+                    job.job_id,
+                )
+            elif snapshot.resume_point.prompt_hash != job.payload.prompt_hash:
                 LOGGER.warning(
                     "discarding snapshot %s: prompt hash mismatch for job %s",
                     snapshot.snapshot_id,
                     job.job_id,
                 )
-            elif snapshot.model and snapshot.model != job.payload.model:
+            elif (snapshot.model and snapshot.model != job.payload.model) or (
+                snapshot.resume_point.model and snapshot.resume_point.model != job.payload.model
+            ):
                 LOGGER.warning(
                     "discarding snapshot %s: model mismatch for job %s",
                     snapshot.snapshot_id,
@@ -146,6 +154,10 @@ class RecoveryCoordinator:
         job.attempt += 1
         job.state = JobState.QUEUED
         job.assigned_node_id = None
+        # An earlier attempt may already have resumed. Its state cannot stand
+        # in for a missing or rejected snapshot on this recovery attempt.
+        job.resume_point = None
+        job.kv_cache_state_id = None
         if resumed and snapshot is not None:
             job.resume_point = snapshot.resume_point
             job.kv_cache_state_id = (
