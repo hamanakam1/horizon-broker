@@ -614,15 +614,25 @@ class BrokerEngine:
 
     async def _run_flex(self, batch: FlexBatch) -> None:
         try:
-            plans = self.planner.plan(list(batch.jobs), self.registry.all())
+            plans = self.planner.plan(
+                list(batch.jobs),
+                self.registry.all(),
+                excluded_by_job={
+                    job.job_id: self.recovery.avoided_nodes(job.job_id) for job in batch.jobs
+                },
+            )
+            planned_ids = {job.job_id for plan in plans for job in plan.jobs}
+            # Planning removes jobs from the queue before routing. A partially
+            # routable batch must return every omitted member, not lose it.
+            for job in batch.jobs:
+                if job.job_id not in planned_ids:
+                    self._defer(job, reason="unroutable")
             if not plans:
                 LOGGER.warning(
                     "flex batch %s could not be routed; returning %d jobs to the queue",
                     batch.model,
                     batch.size,
                 )
-                for job in batch.jobs:
-                    self.queue.requeue_front(job, reason="unroutable")
                 return
             self.metrics.observe("horizon_flex_batch_size", float(batch.size))
             self.metrics.incr(
@@ -647,15 +657,13 @@ class BrokerEngine:
     async def _execute(self, job: InferenceJob, decision: Any = None) -> None:
         """Route and start one job."""
         try:
-            if decision is None:
-                decision = self.dispatcher.route(job)
+            excluded = self.recovery.avoided_nodes(job.job_id)
+            if decision is None or excluded - decision.excluded:
+                decision = self.dispatcher.route(job, excluded=excluded)
             await self.dispatcher.dispatch(job, decision)
         except NoCapacityError as exc:
             LOGGER.warning("deferring job %s: %s", job.job_id, exc)
-            job.state = JobState.QUEUED
-            job.not_before = utcnow() + timedelta(seconds=2)
-            self.queue.requeue_front(job, reason="no-capacity")
-            self.metrics.incr("horizon_jobs_deferred_total")
+            self._defer(job, reason="no-capacity")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -666,6 +674,12 @@ class BrokerEngine:
             # the terminal envelope is journalled so a restart does not
             # resurrect the job.
             self._on_job_finished(job)
+
+    def _defer(self, job: InferenceJob, *, reason: str) -> None:
+        """Retain unavailable work without spinning on an unchanged fleet."""
+        job.not_before = utcnow() + timedelta(seconds=2)
+        self.queue.requeue_front(job, reason=reason)
+        self.metrics.incr("horizon_jobs_deferred_total")
 
     # -- recovery hooks -----------------------------------------------------
 

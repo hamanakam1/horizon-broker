@@ -9,6 +9,7 @@ can amortise the weight load across them.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from horizon_broker.contracts.jobs import InferenceJob
@@ -44,12 +45,14 @@ class BatchPlanner:
         nodes: list[NodeCapability],
         *,
         excluded: frozenset[str] = frozenset(),
+        excluded_by_job: Mapping[str, frozenset[str]] | None = None,
     ) -> list[DispatchBatch]:
         """Route every job and group the ones that share a destination node."""
         grouped: dict[str, tuple[list[InferenceJob], list[RoutingDecision]]] = {}
         for job in jobs:
+            job_excluded = excluded | (excluded_by_job or {}).get(job.job_id, frozenset())
             try:
-                decision = self.router.route(job, nodes, excluded=excluded)
+                decision = self.router.route(job, nodes, excluded=job_excluded)
             except Exception:
                 # Unroutable jobs stay in the queue; the engine reports them.
                 continue
