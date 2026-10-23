@@ -23,8 +23,11 @@ class NodeRegistry:
     def __init__(self) -> None:
         self._nodes: dict[str, NodeCapability] = {}
         self._registered_at: dict[str, datetime] = {}
+        self._pending_job_ids: dict[str, set[str]] = {}
         self._reported_load: dict[str, int] = {}
-        self._reported_assignments: dict[str, int] = {}
+        self._reported_running: dict[str, int] = {}
+        self._reported_running_jobs: dict[str, set[str]] = {}
+        self._released_covered: dict[str, int] = {}
 
     # -- registration -------------------------------------------------------
 
@@ -32,14 +35,13 @@ class NodeRegistry:
         self,
         capability: NodeCapability,
         *,
-        preserve_reported_batch_size: bool = False,
+        occupancy_reported: bool = True,
     ) -> NodeCapability:
         """Register or update a node without confusing partial reports for occupancy.
 
-        ``preserve_reported_batch_size`` is used only when a partial heartbeat
-        omits occupancy: such a report says nothing about how busy the node
-        is, so the live occupancy stands. A full capability report is the
-        node's own count of the work it holds and is authoritative.
+        ``occupancy_reported`` says whether the report describes how busy the
+        node is. A full capability report does; a partial heartbeat that
+        omits the occupancy does not, and then the live occupancy stands.
         """
         existing = self._nodes.get(capability.node_id)
         if existing is not None:
@@ -56,26 +58,36 @@ class NodeRegistry:
                 "quarantined_until": existing.quarantined_until,
                 "metadata": metadata,
             }
-            if preserve_reported_batch_size:
+            if not occupancy_reported:
                 # The report says nothing about occupancy: keep the live count.
                 updates["current_batch_size"] = existing.current_batch_size
             else:
-                # The node reports what it holds. Our own assignments are
-                # part of that report from now on, so the pending ones - the
-                # jobs placed since - are the only ones it may not know about.
-                self._reported_load[capability.node_id] = capability.current_batch_size
-                self._reported_assignments[capability.node_id] = len(
-                    existing.assigned_job_ids
-                )
+                # The node reports the work it is running. The slots this
+                # broker reserved for a phase that has not started yet are
+                # invisible to it, so they are added to the report.
+                pending = len(self._pending_job_ids.get(capability.node_id, ()))
                 updates["current_batch_size"] = self._occupancy(
-                    capability.node_id, len(existing.assigned_job_ids)
+                    capability.node_id,
+                    len(existing.assigned_job_ids),
+                    reported=capability.current_batch_size,
                 )
+                self._reported_load[capability.node_id] = capability.current_batch_size
+                self._reported_running[capability.node_id] = (
+                    len(existing.assigned_job_ids) - pending
+                )
+                self._reported_running_jobs[capability.node_id] = {
+                    job_id
+                    for job_id in existing.assigned_job_ids
+                    if job_id not in self._pending_job_ids.get(capability.node_id, set())
+                }
+                self._released_covered[capability.node_id] = 0
             if capability.last_heartbeat_at is None:
                 updates["last_heartbeat_at"] = existing.last_heartbeat_at
             capability = capability.model_copy(update=updates)
         else:
+            # A new node: its first report is the baseline.
             self._reported_load[capability.node_id] = capability.current_batch_size
-            self._reported_assignments[capability.node_id] = 0
+            self._reported_running[capability.node_id] = 0
         self._nodes[capability.node_id] = capability
         self._registered_at.setdefault(capability.node_id, utcnow())
         return capability
@@ -87,8 +99,11 @@ class NodeRegistry:
         """Forget a node entirely."""
         self._nodes.pop(node_id, None)
         self._registered_at.pop(node_id, None)
+        self._pending_job_ids.pop(node_id, None)
         self._reported_load.pop(node_id, None)
-        self._reported_assignments.pop(node_id, None)
+        self._reported_running.pop(node_id, None)
+        self._reported_running_jobs.pop(node_id, None)
+        self._released_covered.pop(node_id, None)
 
     def get(self, node_id: str) -> NodeCapability | None:
         return self._nodes.get(node_id)
@@ -150,24 +165,64 @@ class NodeRegistry:
 
     # -- work accounting ----------------------------------------------------
 
-    def _occupancy(self, node_id: str, assigned_count: int) -> int:
+    def _occupancy(
+        self,
+        node_id: str,
+        assigned_count: int,
+        *,
+        reported: int | None = None,
+    ) -> int:
         """The live occupancy of a node.
 
-        It is the node's last reported load plus the jobs this broker placed
-        since that report (the node may not know about them yet), and never
-        less than the jobs this broker owns. The broker therefore never books
-        a node beyond what it can take, and a report corrects the count.
+        A node reports the work it is *running*, and that report already
+        counts this broker's running jobs. Two things sit on top of it: the
+        jobs this broker started after the report (the node does not know
+        about them yet) and the slots it reserved for a phase that has not
+        started (the node cannot count those at all). The broker's own jobs
+        are the floor: it never books a node beyond what it can take.
         """
-        reported = self._reported_load.get(node_id, 0)
-        reported_assignments = self._reported_assignments.get(node_id, 0)
-        pending = max(0, assigned_count - reported_assignments)
-        return max(reported + pending, assigned_count)
+        pending = len(self._pending_job_ids.get(node_id, ()))
+        if reported is not None:
+            # A fresh report covers every running job of this broker.
+            return max(assigned_count, reported + pending)
+        running = assigned_count - pending
+        unreported = max(0, running - self._reported_running.get(node_id, 0))
+        # The jobs this broker finished are gone from the node too: it has
+        # simply not said so yet. Its report is corrected here rather than
+        # waiting for the next heartbeat.
+        finished = self._released_covered.get(node_id, 0)
+        return max(
+            assigned_count,
+            self._reported_load.get(node_id, 0) - finished + unreported + pending,
+        )
+
+    def reserve_job(self, node_id: str, job_id: str) -> None:
+        """Hold a slot for a phase of this execution that has not started yet.
+
+        A reserved slot is an assignment the node may not know about yet, so
+        it is kept apart from the node's reported running work. Activating
+        the phase does not charge the slot a second time.
+        """
+        node = self._nodes.get(node_id)
+        if node is None or job_id in node.assigned_job_ids:
+            return
+        self.assign_job(node_id, job_id)
+        self._pending_job_ids.setdefault(node_id, set()).add(job_id)
+
+    def _clear_pending(self, node_id: str, job_id: str) -> None:
+        """Forget a reservation: the phase started, or the slot was released."""
+        pending = self._pending_job_ids.get(node_id)
+        if pending is not None:
+            pending.discard(job_id)
+            if not pending:
+                self._pending_job_ids.pop(node_id, None)
 
     def assign_job(self, node_id: str, job_id: str) -> None:
-        """Attach a job to a node."""
+        """Activate work without charging a previously reserved slot twice."""
         node = self._nodes.get(node_id)
         if node is None:
             return
+        self._clear_pending(node_id, job_id)
         if job_id in node.assigned_job_ids:
             return
         assigned = node.assigned_job_ids + (job_id,)
@@ -183,11 +238,18 @@ class NodeRegistry:
 
     def release_job(self, node_id: str, job_id: str) -> None:
         """Detach a job from a node."""
+        self._clear_pending(node_id, job_id)
         node = self._nodes.get(node_id)
         if node is None or job_id not in node.assigned_job_ids:
             # Late or duplicate terminal events must not erase occupancy that
             # belongs to the node or to another broker's work.
             return
+        covered = self._reported_running_jobs.get(node_id, set())
+        if job_id in covered:
+            # The node's last report counted this job; it is finished, so the
+            # reported load is one too high until the next report says so.
+            self._released_covered[node_id] = self._released_covered.get(node_id, 0) + 1
+            covered.discard(job_id)
         assigned = tuple(item for item in node.assigned_job_ids if item != job_id)
         self._nodes[node_id] = node.model_copy(
             update={
@@ -195,7 +257,9 @@ class NodeRegistry:
                 # The slot this job held is freed, but never below the jobs
                 # this broker still owns: a late or duplicate release must not
                 # erase occupancy that belongs to the node or to another
-                # broker's work.
+                # broker's work. A job the node has already reported is the
+                # node's to give back - it frees the slot when its next
+                # report arrives.
                 "current_batch_size": self._occupancy(node_id, len(assigned)),
             }
         )

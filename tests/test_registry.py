@@ -100,7 +100,7 @@ def test_new_registration_always_seeds_the_reported_occupancy_baseline() -> None
         current_batch_size=2,
     )
 
-    registry.upsert(node, preserve_reported_batch_size=True)
+    registry.upsert(node, occupancy_reported=False)
     registry.assign_job(node.node_id, "local-job")
     registry.release_job(node.node_id, "local-job")
 
