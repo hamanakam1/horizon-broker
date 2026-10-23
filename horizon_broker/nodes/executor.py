@@ -139,7 +139,6 @@ class JobSupervisor:
         self._contexts[job.job_id] = context
         job.state = JobState.DISPATCHED
         job.assigned_node_id = node.node_id
-        self.registry.assign_job(node.node_id, job.job_id)
 
         if decision.is_split and self._split_is_executable(decision):
             context.phase = ExecutionPhase.PREFILL
@@ -194,34 +193,48 @@ class JobSupervisor:
         context.job.assigned_node_id = node_id
         self.registry.assign_job(node_id, context.job.job_id)
 
-        if node.execution_mode is ExecutionMode.AGENT_CONTAINER:
-            if self._assign is None:
-                raise RuntimeError("no assignment callback configured for agent containers")
-            await self._assign(
-                node_id,
-                {
-                    "type": "assign",
-                    "job": context.job.model_dump(mode="json"),
-                    "phase": phase.value,
-                    "resume_point": (
-                        context.job.resume_point.model_dump(mode="json")
-                        if context.job.resume_point
-                        else None
-                    ),
-                    "kv_cache_state_id": context.kv_cache_state_id,
-                },
-            )
-        else:
-            context.task = asyncio.create_task(self._run_ollama(context, node))
+        try:
+            if node.execution_mode is ExecutionMode.AGENT_CONTAINER:
+                if self._assign is None:
+                    raise RuntimeError("no assignment callback configured for agent containers")
+                await self._assign(
+                    node_id,
+                    {
+                        "type": "assign",
+                        "job": context.job.model_dump(mode="json"),
+                        "phase": phase.value,
+                        "resume_point": (
+                            context.job.resume_point.model_dump(mode="json")
+                            if context.job.resume_point
+                            else None
+                        ),
+                        "kv_cache_state_id": context.kv_cache_state_id,
+                    },
+                )
+            else:
+                context.task = asyncio.create_task(self._run_ollama(context, node))
+        except Exception:
+            if (
+                self._contexts.get(context.job.job_id) is not context
+                or context.node_id != node_id
+                or context.phase is not phase
+            ):
+                # A send can finish after recovery, handoff or completion. Its
+                # old failure cannot invalidate the newer execution or answer.
+                return
+            # Failed startup must not retain a phantom owner that accepts late
+            # events or consumes a slot. Cancellation keeps its existing semantics.
+            self.registry.release_job(node_id, context.job.job_id)
+            self._contexts.pop(context.job.job_id, None)
+            raise
 
     async def _run_ollama(self, context: ExecutionContext, node: NodeCapability) -> None:
         """Stream a generation from an Ollama endpoint and checkpoint as it runs."""
         job = context.job
-        client = self._ollama_factory(node) if self._ollama_factory else None
-        if client is None:
-            await self._fail(context, "no ollama client configured")
-            return
         try:
+            client = self._ollama_factory(node) if self._ollama_factory else None
+            if client is None:
+                raise RuntimeError("no ollama client configured")
             async for chunk in client.generate(job.payload):
                 context.chunks.append(chunk.text)
                 self._notify_chunk(context.job, chunk.text)
@@ -312,7 +325,11 @@ class JobSupervisor:
                 context.chunks.append(text)
                 self._notify_chunk(context.job, text)
             if context.phase is ExecutionPhase.PREFILL:
-                await self._handoff_to_decode(context, event.data)
+                try:
+                    await self._handoff_to_decode(context, event.data)
+                except Exception as exc:  # noqa: BLE001 - handoff failures are terminal answers
+                    LOGGER.warning("decode handoff failed for job %s: %s", context.job.job_id, exc)
+                    await self._fail(context, str(exc))
                 return
             await self._complete(context, context.text)
         elif event.type is NodeEventType.ERROR:
