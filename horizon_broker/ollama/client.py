@@ -125,23 +125,38 @@ class OllamaClient:
                 detail = await response.text()
                 raise OllamaError(f"generate failed: HTTP {response.status} {detail[:400]}")
             async for raw_line in response.content:
-                line = raw_line.decode("utf-8").strip()
+                try:
+                    line = raw_line.decode("utf-8").strip()
+                except UnicodeDecodeError as exc:
+                    raise OllamaError("generation stream contains invalid UTF-8") from exc
                 if not line:
                     continue
                 try:
                     chunk = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+                except json.JSONDecodeError as exc:
+                    raise OllamaError("generation stream contains invalid JSON") from exc
+                if not isinstance(chunk, dict):
+                    raise OllamaError("generation stream record must be an object")
+                if "error" in chunk:
+                    raise OllamaError(f"generation failed: {str(chunk['error'])[:400]}")
+                done = chunk.get("done", False)
+                if not isinstance(done, bool):
+                    raise OllamaError("generation stream done must be a boolean")
                 message = chunk.get("message")
                 text = str(chunk.get("response", ""))
                 if not text and isinstance(message, dict):
                     text = str(message.get("content", ""))
                 yield GenerationChunk(
                     text=text,
-                    done=bool(chunk.get("done", False)),
+                    done=done,
                     done_reason=chunk.get("done_reason"),
                     prompt_eval_count=chunk.get("prompt_eval_count"),
                     eval_count=chunk.get("eval_count"),
                     model=chunk.get("model"),
                     raw=chunk,
                 )
+                if done:
+                    return
+            # HTTP success and a clean EOF can still carry a truncated answer.
+            # Only the engine's terminal record establishes completion.
+            raise OllamaError("generation stream ended without a completion marker")
