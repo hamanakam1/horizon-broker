@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -221,12 +223,18 @@ async def test_an_interactive_job_is_dispatched_immediately(config: Any) -> None
         await server.close()
 
 
-async def test_flex_jobs_wait_for_the_window_and_then_run_as_one_batch(config: Any) -> None:
+async def test_flex_jobs_wait_for_the_window_and_then_run_as_one_batch(
+    config: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Control the scheduler's wall clock without freezing loop or HTTP timers.
+    now = utcnow().timestamp()
+    monkeypatch.setattr(
+        "horizon_broker.scheduler.engine.time",
+        SimpleNamespace(time=lambda: now, monotonic=time.monotonic),
+    )
     server, url = await start_fake_ollama(tokens=("tick",))
     node = make_node("node-a", ollama_url=url)
-    # The idle flush is a different rule with its own test; here the window
-    # is the only thing that may release the batch, so the assertion about
-    # "windowing" does not race the flush.
+    # Idle flush has its own test; this one advances the window explicitly.
     windowed = replace(config, window=replace(config.window, idle_flush=False))
     engine = BrokerEngine(replace(windowed, static_nodes=(node,)))
     await engine.start()
@@ -235,13 +243,17 @@ async def test_flex_jobs_wait_for_the_window_and_then_run_as_one_batch(config: A
         for job in jobs:
             await engine.submit(job)
 
-        # Nothing runs before the window closes.
-        await asyncio.sleep(0.05)
-        assert state_of(engine, jobs[0].job_id) == "windowing"
+        # Let the scheduler observe the jobs, but keep both timed release
+        # conditions (minimum dwell and window expiry) in the future.
+        assert await wait_for(lambda: engine.queue.stats().open_windows == 1)
+        assert all(state_of(engine, job.job_id) == "windowing" for job in jobs)
+        assert engine.metrics.counter("horizon_flex_batches_total") == 0
 
+        now += windowed.window.window_seconds
+        engine.queue.wakeup.set()
         for job in jobs:
             assert await wait_for(lambda job_id=job.job_id: state_of(engine, job_id) == "completed")
-        assert engine.metrics.counter("horizon_flex_batches_total") >= 1
+        assert engine.metrics.counter("horizon_flex_batches_total") == 1
     finally:
         await engine.stop()
         await server.close()
