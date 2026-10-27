@@ -24,23 +24,37 @@ endpoints and stops treating inference as a blocking call. It routes
 long-horizon work, batches it for throughput, and guarantees that a dead node
 does not lose an agent's work.
 
-```text
-   agent ──POST /v1/jobs──▶ ┌───────────────┐   flex window    ┌──────────────┐
-                            │  Ingress API  │──(batching)────▶│  Scheduler   │
-   agent ◀──202 + job_id─────└───────────────┘                  └──────┬───────┘
-                                                                    │ PD-DAG
-                                       ┌────────────────────────────┼───────────────┐
-                                       ▼                            ▼               ▼
-                                 ┌───────────┐                ┌───────────┐   ┌───────────┐
-                                 │  M3 Max   │  prefill-heavy │ Pi decode │   │  Trailer  │
-                                 │ (prefill) │◀───────────────│  (decode) │   │ (solar)   │
-                                 └───────────┘                └───────────┘   └───────────┘
-                                       │                            │               │
-                                       └── heartbeat + checkpoint ─┴───────────────┘
-                                                    │
-                                             ┌──────▼───────┐
-                                             │  EdgeRecord  │  (recovery state)
-                                             └──────────────┘
+```mermaid
+flowchart TD
+    subgraph Client["Agent Interface"]
+        AG["<b>Agent / Client</b>"]
+    end
+
+    subgraph Broker["Horizon Broker Core"]
+        ING["<b>Ingress API</b><br/><code>POST /v1/jobs</code>"]
+        SCH["<b>Scheduler & Batcher</b><br/><i>(flex-window aggregation)</i>"]
+    end
+
+    subgraph Fleet["Heterogeneous Fleet Execution"]
+        M3["<b>M3 Max</b><br/><i>(prefill-heavy)</i>"]
+        PI["<b>Raspberry Pi</b><br/><i>(decode worker)</i>"]
+        TR["<b>Trailer Node</b><br/><i>(solar compute)</i>"]
+    end
+
+    subgraph Storage["Fault Tolerance"]
+        ER[("<b>EdgeRecord</b><br/><i>heartbeat & recovery checkpoint</i>")]
+    end
+
+    AG -->|POST /v1/jobs| ING
+    ING -->|202 Accepted + job_id| AG
+    ING -->|Batched jobs| SCH
+    SCH -->|Prefill task| M3
+    SCH -->|Decode task| PI
+    SCH -->|Solar opportunistic| TR
+    PI -.->|Prefill cache| M3
+    M3 -->|Heartbeat + state| ER
+    PI -->|Heartbeat + state| ER
+    TR -->|Heartbeat + state| ER
 ```
 
 ## What it looks like
