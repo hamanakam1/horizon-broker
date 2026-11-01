@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import time
 
-from horizon_broker.contracts.jobs import JobState, PriorityTier
+from horizon_broker.contracts.jobs import ExecutionPhase, JobState, PriorityTier
 from horizon_broker.scheduler.priority_queue import JobPriorityQueue
+from horizon_broker.scheduler.window import WindowPolicy
 from tests.conftest import make_job
 
 
@@ -37,6 +38,7 @@ def test_requeue_front_preserves_identity_and_promotes() -> None:
     promoted = queue.requeue_front(job, reason="recovery")
     assert promoted is job
     assert job.state is JobState.QUEUED
+    assert job.phase is ExecutionPhase.MONOLITHIC
     assert "recovered:recovery" in job.tags
     assert queue.pop_interactive(time.time()).job_id == job.job_id
 
@@ -53,6 +55,34 @@ def test_flex_jobs_are_grouped_per_model() -> None:
     assert queue.stats().flex == 3
 
 
+def test_flex_planning_reindexes_a_mutated_payload_model() -> None:
+    queue = JobPriorityQueue()
+    job = make_job(tier=PriorityTier.FLEX, model="qwen2.5:7b")
+    queue.submit(job)
+    job.payload.model = "qwen3:8b"
+
+    batches = queue.plan_flex(
+        100.0,
+        WindowPolicy(min_batch_size=1, min_dwell_seconds=0),
+        fleet_idle=True,
+    )
+
+    assert len(batches) == 1
+    assert batches[0].model == "qwen3:8b"
+    assert batches[0].jobs == (job,)
+
+
+def test_removing_a_mutated_flex_job_clears_its_original_model_bucket() -> None:
+    queue = JobPriorityQueue()
+    job = make_job(tier=PriorityTier.FLEX, model="qwen2.5:7b")
+    queue.submit(job)
+    job.payload.model = "qwen3:8b"
+
+    assert queue.remove(job.job_id) is job
+    assert queue.pending_flex() == []
+    assert queue.stats().flex == 0
+
+
 def test_remove_takes_the_job_out_of_the_queue() -> None:
     queue = JobPriorityQueue()
     job = make_job(tier=PriorityTier.FLEX)
@@ -60,6 +90,30 @@ def test_remove_takes_the_job_out_of_the_queue() -> None:
     assert queue.remove(job.job_id) is job
     assert queue.pending_flex() == []
     assert queue.remove(job.job_id) is None
+
+
+def test_removing_the_last_flex_job_closes_its_empty_window() -> None:
+    queue = JobPriorityQueue()
+    job = make_job(tier=PriorityTier.FLEX, model="qwen2.5:7b")
+    queue.submit(job)
+    assert queue.plan_flex(100.0, WindowPolicy(min_batch_size=2), fleet_idle=False) == []
+    assert queue.stats().open_windows == 1
+
+    assert queue.remove(job.job_id) is job
+    assert queue.stats().open_windows == 0
+
+
+def test_requeueing_the_last_flex_job_starts_a_fresh_window() -> None:
+    queue = JobPriorityQueue()
+    job = make_job(tier=PriorityTier.FLEX, model="qwen2.5:7b")
+    queue.submit(job)
+    assert queue.plan_flex(100.0, WindowPolicy(min_batch_size=2), fleet_idle=False) == []
+    assert queue.stats().open_windows == 1
+
+    queue.requeue_front(job, reason="no-capacity")
+    assert queue.stats().open_windows == 0
+    assert queue.plan_flex(101.0, WindowPolicy(min_batch_size=2), fleet_idle=False) == []
+    assert queue.stats().open_windows == 1
 
 
 def test_not_before_defers_dispatch_without_blocking_the_lane() -> None:

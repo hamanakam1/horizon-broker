@@ -64,6 +64,8 @@ class FaultWatchdog:
 
     async def scan(self, now: datetime | None = None) -> list[str]:
         """One detection pass; returns the ids of the nodes declared lost."""
+        if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+            raise ValueError("watchdog timestamp must be timezone-aware")
         current = now or utcnow()
         declared: list[str] = []
         for node in self.registry.all():
@@ -85,17 +87,28 @@ class FaultWatchdog:
                 continue
             if node.health is NodeHealth.DRAINING:
                 if self._on_node_draining is not None:
-                    await self._on_node_draining(node.node_id)
+                    try:
+                        await self._on_node_draining(node.node_id)
+                    except Exception as exc:  # noqa: BLE001 - one callback must not stop scanning
+                        LOGGER.exception(
+                            "draining callback failed for node %s: %s",
+                            node.node_id,
+                            exc,
+                        )
                 continue
 
             last_seen = node.last_heartbeat_at or self.registry.registered_at(node.node_id)
             if last_seen is None:
                 continue
             silence = (current - last_seen).total_seconds()
-            if silence < self.config.timeout_seconds:
+            missed = int(silence // max(self.config.interval_seconds, 0.001))
+            loss_after = max(
+                self.config.timeout_seconds,
+                self.config.interval_seconds * self.config.missed_beats_before_loss,
+            )
+            if silence < loss_after:
                 continue
 
-            missed = int(silence // max(self.config.interval_seconds, 0.001))
             reason = (
                 f"heartbeat missing for {silence:.1f}s "
                 f"({missed} missed beats, threshold {self.config.missed_beats_before_loss})"
@@ -105,7 +118,14 @@ class FaultWatchdog:
             self.registry.quarantine(node.node_id, self.recovery_config.quarantine_seconds)
             declared.append(node.node_id)
             if self._on_node_lost is not None:
-                await self._on_node_lost(node.node_id, reason)
+                try:
+                    await self._on_node_lost(node.node_id, reason)
+                except Exception as exc:  # noqa: BLE001 - one callback must not stop scanning
+                    LOGGER.exception(
+                        "loss callback failed for node %s: %s",
+                        node.node_id,
+                        exc,
+                    )
         return declared
 
     def _quarantine_expired(self, node: NodeCapability, current: datetime) -> bool:

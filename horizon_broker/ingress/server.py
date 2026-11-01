@@ -26,11 +26,27 @@ class BrokerServer:
 
     async def start(self) -> None:
         """Start the engine and bind the HTTP listener."""
-        await self.engine.start()
-        self._runner = web.AppRunner(self.app, access_log=None)
-        await self._runner.setup()
-        self._site = web.TCPSite(self._runner, self.config.host, self.config.port)
-        await self._site.start()
+        try:
+            await self.engine.start()
+            self._runner = web.AppRunner(self.app, access_log=None)
+            await self._runner.setup()
+            self._site = web.TCPSite(self._runner, self.config.host, self.config.port)
+            await self._site.start()
+        except BaseException:
+            if self._site is not None:
+                try:
+                    await self._site.stop()
+                except Exception as exc:  # noqa: BLE001 - preserve the startup failure
+                    LOGGER.debug("could not stop a partially started HTTP site: %s", exc)
+                self._site = None
+            if self._runner is not None:
+                try:
+                    await self._runner.cleanup()
+                except Exception as exc:  # noqa: BLE001 - preserve the startup failure
+                    LOGGER.debug("could not clean up a partially started HTTP runner: %s", exc)
+                self._runner = None
+            await self.engine.stop(drain=False)
+            raise
         LOGGER.info(
             "horizon broker ingress listening on http://%s:%d",
             self.config.host,
@@ -43,13 +59,19 @@ class BrokerServer:
         With ``drain`` the engine finishes its in-flight jobs first; the
         listener is stopped before that so no new work arrives.
         """
-        if self._site is not None:
-            await self._site.stop()
+        site = self._site
+        runner = self._runner
+        try:
+            if site is not None:
+                await site.stop()
+        finally:
             self._site = None
-        if self._runner is not None:
-            await self._runner.cleanup()
-            self._runner = None
-        await self.engine.stop(drain=drain)
+            try:
+                if runner is not None:
+                    await runner.cleanup()
+            finally:
+                self._runner = None
+                await self.engine.stop(drain=drain)
 
     @property
     def url(self) -> str:

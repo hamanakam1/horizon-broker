@@ -55,6 +55,8 @@ class NodeSelector:
         now: datetime | None = None,
     ) -> list[NodeCapability]:
         """Filter the fleet down to nodes that may accept the job."""
+        if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+            raise ValueError("placement timestamp must be timezone-aware")
         current = now or utcnow()
         candidates: list[NodeCapability] = []
         for node in nodes:
@@ -151,7 +153,7 @@ class NodeSelector:
             profile.model,
             required_role=required_role,
             excluded=excluded,
-            require_memory_bytes=0,
+            require_memory_bytes=int(profile.prefill_bytes),
             flex_tier=flex_tier,
         )
         if not candidates:
