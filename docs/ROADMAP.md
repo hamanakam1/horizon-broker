@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.2.0 (alpha) · 700 passing tests · one broker, one fleet
+**Status:** v0.3.0 (alpha) · 703 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
@@ -237,8 +237,10 @@ node-loss sequence are generated from typed specifications in
 `docs/diagrams/` and are republished with every release.
 
 **Release hygiene.** The version in `pyproject.toml`, the tag, the compose
-image tag and the `entry_points.txt` artefact move together. `v0.2.0` is
-current, and the compose image tag is aligned with it.
+image tag and the `entry_points.txt` artefact move together. `v0.3.0` is
+current, and the compose image tag is aligned with it. The changelog is
+[`CHANGELOG.md`](../CHANGELOG.md); a release that has no changelog entry is
+not a release.
 
 ---
 

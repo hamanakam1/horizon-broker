@@ -146,8 +146,8 @@ python -m horizon_broker serve --config config/broker.yaml
 A published image is built and smoke-tested on every release tag.
 
 ```sh
-docker pull ghcr.io/hamanakam1/horizon-broker:0.2.0
-docker run --rm -p 8791:8791 ghcr.io/hamanakam1/horizon-broker:0.2.0
+docker pull ghcr.io/hamanakam1/horizon-broker:0.3.0
+docker run --rm -p 8791:8791 ghcr.io/hamanakam1/horizon-broker:0.3.0
 ```
 
 The image runs as a non-root user and keeps its journal on
@@ -370,6 +370,7 @@ EDGERECORD_TOKEN=...        # the ledger token, read per request
 
 ## Documents
 
+* [`CHANGELOG.md`](CHANGELOG.md) — what changed in each release, with the evidence
 * [`docs/ROADMAP.md`](docs/ROADMAP.md) — the long-term plan: what the software
   becomes, in which order, and what each phase must prove
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — directory tree, subsystem map, fault timeline
@@ -443,16 +444,23 @@ make schemas     # regenerate schemas/*.v1.json
 
 ## Status
 
-**v0.2.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests (700 of them). The
-prefill/decode split runs end to end for engines that can export a KV cache
+**v0.3.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
+recovery paths are implemented and covered by tests (703 of them).
+
+This release is the "truth" release: the behaviour and the documentation now
+say the same thing. A node that failed once returns to the fleet when its
+quarantine expires, a cancelled or expired job answers its caller instead of
+hanging it, the completion counters move, every summary publishes p50/p95/p99,
+and the queue is rebuilt from the journal when the broker restarts.
+
+The prefill/decode split runs end to end for engines that can export a KV cache
 (enable them in `routing.kv_handoff_models`); Ollama cannot, so the broker
 degrades a split to a whole-job run and says so in the log and the
 `horizon_splits_degraded_total` metric.
 
-Not done yet: a real EdgeRecord ledger adapter (the HTTP port is exercised
-through a fake in the test suite) and multi-broker coordination (one broker
-owns one fleet).
+Not done yet: multi-broker coordination (one broker owns one fleet) and a real
+batched request to a direct Ollama node (the EdgeRecord port is now pinned to
+its documented envelope and exercised through a fake in the test suite).
 
 The long-term plan — what the software becomes, in which order, and what each
 phase has to prove before it is allowed to ship — is in
