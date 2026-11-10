@@ -133,7 +133,7 @@ real work. Throughput is what makes the fleet worth owning.
 | 1.4 | One HTTP session for the whole broker | `scheduler/engine.py` | **done** — the broker-owned pool is shared by Ollama, probes, control channels and EdgeRecord; caller-supplied sessions remain caller-owned |
 | 1.5 | Wake the queue instead of polling it | `scheduler/engine.py`, `scheduler/priority_queue.py` | **done** — the lanes await the queue's wakeup event; the poll interval stays the fallback for time-based conditions |
 | 1.6 | Rebuild the queue from the journal after a restart | `recovery/snapshot_store.py`, `docs/RUNBOOK.md` | **done** — a cold start replays every non-terminal job |
-| 1.7 | Ship a real EdgeRecord adapter | `recovery/ledger.py` | open — the ledger port is a generic HTTP shim that accepts four different response shapes |
+| 1.7 | Ship a real EdgeRecord adapter | `recovery/ledger.py`, `config.py` | **done** — the port speaks one envelope (`{"records": [...]}`) and the client reads only that; the legacy shapes are an explicit opt-in (`ledger.accept_alternate_envelopes`), the returned hash is verified against the payload, and the record must carry this broker's owner tag |
 | 1.8 | Make the OpenAI ingress agree with the native ingress | `ingress/openai.py`, `ingress/app.py` | **done** — both use `scheduling.interactive_latency_threshold_ms` |
 | 1.9 | Stop duplicating the system prompt | `ingress/openai.py` | **done** — the system message travels in `payload.system` only |
 | 1.10 | Enforce the per-node batch limit end to end | `scheduler/batcher.py`, `nodes/registry.py` | **done** — planning splits routed groups at each node's remaining `batch_headroom`, preserves unroutable members for retry, and tests cover full and partially occupied nodes |
@@ -168,7 +168,7 @@ limit is honest and documented; it is only dishonest if it is forgotten.
 | 2.3 | Namespace job ids by broker and fleet | `contracts/jobs.py:193` | ids are bare UUIDs, so a broker cannot tell its own work from another broker's |
 | 2.4 | Lock the journal against two writers | `recovery/journal.py` | **done** — a stable sidecar `flock` coordinates append, trim and read operations across broker processes |
 | 2.5 | Filter the ledger query by broker | `recovery/ledger.py:146` | **done** — an explicit `ledger.owner_id` scopes queries and adds a broker tag to committed recovery records |
-| 2.6 | Make the KV hand-off real, or delete it | `routing/pd_dag.py:85`, `nodes/executor.py:159` | the protocol is implemented and tested, but no engine can export a KV cache; either an engine appears or the split mode leaves the roadmap |
+| 2.6 | Make the KV hand-off real, or delete it | `routing/pd_dag.py`, `nodes/executor.py` | **decided** — the protocol stays, but only as an opt-in that no shipped engine enables: `routing.kv_handoff_models` is empty by default, Ollama cannot export a KV cache, and a split that cannot be honoured degrades to a whole-job run and says so in the log and in `horizon_splits_degraded_total`. The split leaves the roadmap when an engine can export a KV cache; until then it is a documented protocol, not a promised feature |
 | 2.7 | Track per-job tasks and await them on drain | `scheduler/engine.py`, `nodes/executor.py` | **done** — a bounded drain lets active work finish, and a timeout cancels/reconciles every active execution before shared transport teardown |
 
 **Gate C — two brokers, one fleet, one job.**

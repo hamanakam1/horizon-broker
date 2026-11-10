@@ -151,6 +151,15 @@ class LedgerConfig:
     """Environment variable holding the ledger token (empty means no auth)."""
     auth_header: str = "Authorization"
     auth_scheme: str = "Bearer"
+    accept_alternate_envelopes: bool = False
+    """Read the legacy query envelopes as well.
+
+    The port speaks one shape: ``{"records": [...]}``. A ledger that
+    answers with ``items``, ``results``, ``documents``, a bare list or a
+    bare object is a different port, and guessing which one it is hides
+    a misconfiguration behind a silent read. Operators who really run
+    such a ledger can switch the tolerance on deliberately.
+    """
 
 
 @dataclass(frozen=True)

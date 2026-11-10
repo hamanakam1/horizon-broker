@@ -570,6 +570,80 @@ async def test_a_query_returns_the_newest_record() -> None:
         await server.close()
 
 
+async def test_the_port_speaks_one_query_envelope() -> None:
+    """The client reads ``{"records": [...]}`` and no other shape.
+
+    A ledger that answers differently is a misconfiguration; guessing
+    which envelope it used hides that behind a silent read.
+    """
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response({"items": [{"document_id": "doc-1"}]})
+
+    server, url = await start_ledger(handler)
+    client = EdgeRecordClient(LedgerConfig(enabled=True, base_url=url, max_retries=0))
+    try:
+        with pytest.raises(LedgerUnavailableError, match="unrecognized object"):
+            await client.latest_for_job("job-1")
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_a_bare_collection_is_refused_by_default() -> None:
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response([{"document_id": "doc-1"}])
+
+    server, url = await start_ledger(handler)
+    client = EdgeRecordClient(LedgerConfig(enabled=True, base_url=url, max_retries=0))
+    try:
+        with pytest.raises(LedgerUnavailableError, match="bare collection"):
+            await client.latest_for_job("job-1")
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_the_alternate_envelopes_can_be_opted_into() -> None:
+    """An operator who really runs such a ledger can switch the tolerance on."""
+    payload = {"job_id": "job-1", "step": 3}
+    content_hash = LedgerRecord.build(
+        collection="horizon_broker.snapshots",
+        document_id="doc-1",
+        payload=payload,
+    ).content_hash
+
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response(
+            {
+                "items": [
+                    {
+                        "document_id": "doc-1",
+                        "payload": payload,
+                        "content_hash": content_hash,
+                        "tags": ["broker:horizon-broker"],
+                    }
+                ]
+            }
+        )
+
+    server, url = await start_ledger(handler)
+    client = EdgeRecordClient(
+        LedgerConfig(
+            enabled=True,
+            base_url=url,
+            max_retries=0,
+            accept_alternate_envelopes=True,
+        )
+    )
+    try:
+        record = await client.latest_for_job("job-1")
+        assert record is not None
+        assert record.payload["step"] == 3
+    finally:
+        await client.close()
+        await server.close()
+
+
 async def test_a_redirected_query_is_not_treated_as_success() -> None:
     async def handler(request: web.Request) -> web.Response:
         return web.json_response(
@@ -621,7 +695,8 @@ async def test_a_query_record_without_a_broker_owner_tag_is_rejected() -> None:
         await server.close()
 
 
-async def test_a_query_accepts_a_bare_list() -> None:
+async def test_a_query_accepts_a_bare_list_only_when_asked_to() -> None:
+    """The bare list is a legacy envelope; it is read only on request."""
     async def handler(request: web.Request) -> web.Response:
         payload = {"job_id": "job-1"}
         content_hash = LedgerRecord.build(
@@ -641,7 +716,14 @@ async def test_a_query_accepts_a_bare_list() -> None:
         )
 
     server, url = await start_ledger(handler)
-    client = EdgeRecordClient(LedgerConfig(enabled=True, base_url=url))
+    client = EdgeRecordClient(
+        LedgerConfig(
+            enabled=True,
+            base_url=url,
+            max_retries=0,
+            accept_alternate_envelopes=True,
+        )
+    )
     try:
         record = await client.latest_for_job("job-1")
         assert record is not None

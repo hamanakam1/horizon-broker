@@ -257,7 +257,10 @@ class EdgeRecordClient:
         else:
             raise last_error or LedgerUnavailableError("ledger query failed")
 
-        records = _extract_records(data)
+        records = _extract_records(
+            data,
+            allow_alternates=self.config.accept_alternate_envelopes,
+        )
         if not records:
             return None
         raw: dict[str, Any] = records[0]
@@ -345,10 +348,17 @@ class EdgeRecordClient:
             ) from exc
 
 
-def _extract_records(data: Any) -> list[dict[str, Any]]:
-    """Normalize a query envelope without mistaking malformed data for absence."""
+def _extract_records(data: Any, *, allow_alternates: bool = False) -> list[dict[str, Any]]:
+    """Normalize a query envelope without mistaking malformed data for absence.
+
+    The port has one shape: ``{"records": [...]}``. The alternate envelopes
+    are read only when the operator asks for them, because a client that
+    accepts four shapes cannot tell a misconfigured ledger from a working
+    one.
+    """
     if isinstance(data, dict):
-        for key in ("records", "items", "results", "documents"):
+        keys = ("records", "items", "results", "documents") if allow_alternates else ("records",)
+        for key in keys:
             if key not in data:
                 continue
             value = data[key]
@@ -357,10 +367,15 @@ def _extract_records(data: Any) -> list[dict[str, Any]]:
                     f"ledger query returned a malformed {key} collection"
                 )
             return list(value)
-        if "document_id" in data:
+        if allow_alternates and "document_id" in data:
             return [data]
         raise LedgerUnavailableError("ledger query returned an unrecognized object")
     if isinstance(data, list):
+        if not allow_alternates:
+            raise LedgerUnavailableError(
+                "ledger query returned a bare collection; the port answers "
+                "with a {\"records\": [...]} envelope"
+            )
         if not all(isinstance(item, dict) for item in data):
             raise LedgerUnavailableError("ledger query returned a malformed collection")
         return list(data)

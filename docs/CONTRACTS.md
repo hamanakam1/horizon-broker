@@ -287,6 +287,14 @@ EdgeRecord collection can enforce the same ownership boundary on writes and
 reads. A returned record must carry the configured owner tag; a missing or
 conflicting owner is rejected as unavailable recovery state.
 
+The query reply has exactly one shape: `{"records": [...]}`. The broker does
+not read `items`, `results`, `documents`, a bare list or a bare object — a
+client that guesses between four envelopes cannot tell a misconfigured ledger
+from a working one, and a silent misread is worse than a loud refusal. An
+operator whose ledger really answers with one of the legacy shapes can set
+`ledger.accept_alternate_envelopes: true`; the tolerance is then explicit and
+visible in the configuration.
+
 Transient failures (network errors and 5xx) are retried with a growing
 backoff (`ledger.max_retries`, `ledger.retry_backoff_seconds`); a 4xx is
 permanent and fails immediately, because retrying a rejected document only

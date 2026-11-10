@@ -75,6 +75,10 @@ ledger:
   # rotated without restarting the broker.
   auth_token_env: EDGERECORD_TOKEN
   auth_header: Authorization
+  # The port answers with one envelope: {"records": [...]}. A ledger that
+  # replies with "items", "results", "documents" or a bare list is a
+  # different port; switch this on only if that is really your ledger.
+  accept_alternate_envelopes: false
   auth_scheme: Bearer
 
 ollama:
