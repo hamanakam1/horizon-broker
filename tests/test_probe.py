@@ -7,8 +7,11 @@ lost and quarantined it - the M3 Max disappeared from its own mesh.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
+import aiohttp
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
@@ -42,6 +45,33 @@ async def test_a_direct_node_is_heartbeated_by_the_probe() -> None:
         results = await probe.probe_once()
         assert [result.healthy for result in results] == [True]
         assert registry.get("m3-max").last_heartbeat_at is not None
+    finally:
+        await probe.close()
+        await server.close()
+
+
+async def test_a_200_probe_with_invalid_version_body_is_not_healthy() -> None:
+    async def handler(request: web.Request) -> web.Response:
+        return web.json_response({"unexpected": "body"})
+
+    app = web.Application()
+    app.router.add_get("/api/version", handler)
+    server = TestServer(app)
+    await server.start_server()
+    registry = NodeRegistry()
+    registry.upsert(
+        make_node(
+            "m3-max",
+            execution_mode=ExecutionMode.OLLAMA_DIRECT,
+            ollama_url=str(server.make_url("")),
+        )
+    )
+    probe = NodeHealthProbe(registry)
+    try:
+        results = await probe.probe_once()
+        assert results[0].healthy is False
+        assert "invalid version" in results[0].detail
+        assert registry.get("m3-max").last_heartbeat_at is None
     finally:
         await probe.close()
         await server.close()
@@ -108,3 +138,46 @@ async def test_a_probed_node_survives_the_watchdog() -> None:
     finally:
         await probe.close()
         await server.close()
+
+
+async def test_a_probe_uses_its_own_timeout_with_a_shared_session() -> None:
+    async def slow_handler(request: web.Request) -> web.Response:
+        await asyncio.sleep(0.2)
+        return web.json_response({"version": "0.5.0"})
+
+    app = web.Application()
+    app.router.add_get("/api/version", slow_handler)
+    server = TestServer(app)
+    await server.start_server()
+    session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5.0))
+    registry = NodeRegistry()
+    registry.upsert(
+        make_node(
+            "m3-max",
+            execution_mode=ExecutionMode.OLLAMA_DIRECT,
+            ollama_url=str(server.make_url("")),
+        )
+    )
+    probe = NodeHealthProbe(registry, session=session, timeout_seconds=0.01)
+    try:
+        results = await probe.probe_once()
+        assert results[0].healthy is False
+        assert "timed out" in results[0].detail.lower()
+    finally:
+        await probe.close()
+        await session.close()
+        await server.close()
+
+
+async def test_probe_forgets_owned_session_when_close_fails() -> None:
+    class Session:
+        async def close(self) -> None:
+            raise RuntimeError("synthetic session close failure")
+
+    registry = NodeRegistry()
+    probe = NodeHealthProbe(registry)
+    probe._session = Session()  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="session close failure"):
+        await probe.close()
+    assert probe._session is None

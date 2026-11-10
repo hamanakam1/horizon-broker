@@ -23,16 +23,45 @@ class NodeRegistry:
     def __init__(self) -> None:
         self._nodes: dict[str, NodeCapability] = {}
         self._registered_at: dict[str, datetime] = {}
+        self._reported_batch_size: dict[str, int] = {}
 
     # -- registration -------------------------------------------------------
 
-    def upsert(self, capability: NodeCapability) -> NodeCapability:
-        """Register or update a node, preserving the last heartbeat when unset."""
+    def upsert(
+        self,
+        capability: NodeCapability,
+        *,
+        preserve_reported_batch_size: bool = False,
+    ) -> NodeCapability:
+        """Register or update a node without confusing partial reports for occupancy.
+
+        ``preserve_reported_batch_size`` is used only when a partial heartbeat
+        omits occupancy. A full capability report must leave it false so the
+        node's explicit remote baseline replaces the previous one.
+        """
         existing = self._nodes.get(capability.node_id)
-        if existing is not None and capability.last_heartbeat_at is None:
-            capability = capability.model_copy(
-                update={"last_heartbeat_at": existing.last_heartbeat_at}
-            )
+        if existing is None or not preserve_reported_batch_size:
+            self._reported_batch_size[capability.node_id] = capability.current_batch_size
+        if existing is not None:
+            # Announcements describe node state, but broker-owned assignments
+            # are local authority. A heartbeat's default empty tuple must not
+            # erase jobs already reserved by this broker.
+            metadata = {**existing.metadata, **capability.metadata}
+            if "health_reason" in existing.metadata:
+                metadata["health_reason"] = existing.metadata["health_reason"]
+            updates: dict[str, Any] = {
+                "assigned_job_ids": existing.assigned_job_ids,
+                "current_batch_size": max(
+                    capability.current_batch_size, len(existing.assigned_job_ids)
+                ),
+                # Health and quarantine are broker verdicts, not node claims.
+                "health": existing.health,
+                "quarantined_until": existing.quarantined_until,
+                "metadata": metadata,
+            }
+            if capability.last_heartbeat_at is None:
+                updates["last_heartbeat_at"] = existing.last_heartbeat_at
+            capability = capability.model_copy(update=updates)
         self._nodes[capability.node_id] = capability
         self._registered_at.setdefault(capability.node_id, utcnow())
         return capability
@@ -41,6 +70,7 @@ class NodeRegistry:
         """Forget a node entirely."""
         self._nodes.pop(node_id, None)
         self._registered_at.pop(node_id, None)
+        self._reported_batch_size.pop(node_id, None)
 
     def get(self, node_id: str) -> NodeCapability | None:
         return self._nodes.get(node_id)
@@ -68,6 +98,8 @@ class NodeRegistry:
 
     def record_heartbeat(self, node_id: str, at: datetime | None = None) -> None:
         """Record a heartbeat from a node."""
+        if at is not None and (at.tzinfo is None or at.utcoffset() is None):
+            raise ValueError("heartbeat timestamp must be timezone-aware")
         node = self._nodes.get(node_id)
         if node is None:
             return
@@ -91,6 +123,8 @@ class NodeRegistry:
 
     def is_quarantined(self, node_id: str, now: datetime | None = None) -> bool:
         """True while the node is excluded from placement."""
+        if now is not None and (now.tzinfo is None or now.utcoffset() is None):
+            raise ValueError("quarantine timestamp must be timezone-aware")
         node = self._nodes.get(node_id)
         if node is None or node.quarantined_until is None:
             return False
@@ -109,18 +143,27 @@ class NodeRegistry:
         self._nodes[node_id] = node.model_copy(
             update={
                 "assigned_job_ids": assigned,
-                "current_batch_size": max(node.current_batch_size, len(assigned)),
+                "current_batch_size": max(
+                    self._reported_batch_size.get(node_id, 0), len(assigned)
+                ),
             }
         )
 
     def release_job(self, node_id: str, job_id: str) -> None:
         """Detach a job from a node."""
         node = self._nodes.get(node_id)
-        if node is None:
+        if node is None or job_id not in node.assigned_job_ids:
+            # Late or duplicate terminal events must not erase occupancy that
+            # belongs to the node or to another broker's work.
             return
         assigned = tuple(item for item in node.assigned_job_ids if item != job_id)
         self._nodes[node_id] = node.model_copy(
-            update={"assigned_job_ids": assigned, "current_batch_size": len(assigned)}
+            update={
+                "assigned_job_ids": assigned,
+                "current_batch_size": max(
+                    self._reported_batch_size.get(node_id, 0), len(assigned)
+                ),
+            }
         )
 
     def jobs_on(self, node_id: str) -> tuple[str, ...]:

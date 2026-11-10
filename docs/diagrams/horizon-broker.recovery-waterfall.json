@@ -36,6 +36,6 @@
   "cards": [
     { "dot": "amber", "title": "These are designed budgets, not a trace", "items": ["The evidence flag is illustrative: no profiler run backs these numbers", "Every duration comes from the documented fault timeline and the shipped defaults", "The bar lengths are the documented design, not a measurement"] },
     { "dot": "emerald", "title": "Detection is the cost", "items": ["Six of the 6.5 seconds are the heartbeat silence window", "The recovery work itself is five hundred milliseconds in the design", "A shorter heartbeat interval buys back detection time at the cost of chatter"] },
-    { "dot": "cyan", "title": "What the plan still gets wrong", "items": ["The detection budget assumes silence means death, so a transient socket drop fails the job instead", "The quarantine that follows never expires", "Phase 0 of the roadmap closes both"] }
+    { "dot": "cyan", "title": "What the design guarantees", "items": ["A transient socket error does not terminally fail the running job", "The quarantine has an explicit expiry and placement honors it", "The recovery budget is bounded separately from the resumed generation"] }
   ]
 }

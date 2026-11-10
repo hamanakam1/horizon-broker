@@ -7,6 +7,7 @@ scrape endpoint surprises. The broker exposes the rendered text at
 
 from __future__ import annotations
 
+import math
 import threading
 from collections import defaultdict
 from typing import Any
@@ -34,6 +35,7 @@ class MetricsRegistry:
 
     def declare(self, name: str, value: float = 0.0, **labels: Any) -> None:
         """Pre-register a counter so it is exposed even before the first event."""
+        _require_finite(value)
         with self._lock:
             key = _key(name, labels)
             self._counters.setdefault(key, value)
@@ -49,14 +51,17 @@ class MetricsRegistry:
             self._histograms.setdefault(key, [])
 
     def incr(self, name: str, value: float = 1.0, **labels: Any) -> None:
+        _require_finite(value)
         with self._lock:
             self._counters[_key(name, labels)] += value
 
     def set_gauge(self, name: str, value: float, **labels: Any) -> None:
+        _require_finite(value)
         with self._lock:
             self._gauges[_key(name, labels)] = value
 
     def observe(self, name: str, value: float, **labels: Any) -> None:
+        _require_finite(value)
         with self._lock:
             self._histograms[_key(name, labels)].append(value)
 
@@ -77,6 +82,11 @@ class MetricsRegistry:
                 if all(metric_labels.get(label) == expected for label, expected in labels.items()):
                     total += value
             return total
+
+    def gauge(self, name: str, **labels: Any) -> float:
+        """Read a gauge, returning zero when it has not been recorded."""
+        with self._lock:
+            return self._gauges.get(_key(name, labels), 0.0)
 
     def histogram(self, name: str) -> list[float]:
         """Every observation of ``name``, across all label combinations."""
@@ -168,6 +178,18 @@ def _parse_key(key: str) -> tuple[str, dict[str, str]]:
 
 QUANTILES = (("0.5", 0.5), ("0.95", 0.95), ("0.99", 0.99))
 """The percentiles the broker publishes for every summary."""
+
+
+def _require_finite(value: float) -> None:
+    """Keep invalid numeric samples out of the Prometheus exposition."""
+    if isinstance(value, bool):
+        raise ValueError("metric values must be finite numbers, not booleans")
+    try:
+        finite = math.isfinite(float(value))
+    except (OverflowError, TypeError, ValueError):
+        finite = False
+    if not finite:
+        raise ValueError("metric values must be finite numbers")
 
 
 def _quantiles(observations: list[float]) -> list[tuple[str, float]]:

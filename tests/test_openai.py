@@ -6,11 +6,12 @@ import json
 from dataclasses import replace
 from typing import Any
 
+import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from horizon_broker.contracts.jobs import PriorityTier
 from horizon_broker.ingress.app import create_app
-from horizon_broker.ingress.openai import OpenAITranslationError, chat_request_to_job
+from horizon_broker.ingress.openai import OpenAITranslationError, chat_request_to_job, sse
 from horizon_broker.scheduler.engine import BrokerEngine
 from tests.conftest import make_node
 from tests.test_engine import start_fake_ollama
@@ -49,6 +50,11 @@ def test_a_chat_request_becomes_a_job() -> None:
     assert job.payload.estimated_prompt_tokens > 0
 
 
+def test_sse_rejects_non_standard_json_numbers() -> None:
+    with pytest.raises(ValueError, match="Out of range float values"):
+        sse({"value": float("nan")})
+
+
 def test_a_slow_request_becomes_flex_work() -> None:
     job = chat_request_to_job(
         {
@@ -72,6 +78,16 @@ def test_an_explicit_tier_wins() -> None:
     assert job.priority_tier.value == "interactive"
 
 
+def test_an_invalid_explicit_tier_is_a_translation_error() -> None:
+    with pytest.raises(OpenAITranslationError, match="horizon_priority_tier"):
+        chat_request_to_job(
+            {
+                "messages": [{"role": "user", "content": "hello"}],
+                "horizon_priority_tier": "urgent",
+            }
+        )
+
+
 def test_a_request_without_messages_is_rejected() -> None:
     try:
         chat_request_to_job({"model": "qwen2.5:7b", "messages": []})
@@ -79,6 +95,105 @@ def test_a_request_without_messages_is_rejected() -> None:
         assert "messages" in str(exc)
     else:
         raise AssertionError("the request should have been rejected")
+
+
+def test_malformed_sampling_parameters_are_translation_errors() -> None:
+    for field in ("temperature", "top_p", "top_k"):
+        body = {"messages": [{"role": "user", "content": "hello"}], field: "invalid"}
+        try:
+            chat_request_to_job(body)
+        except OpenAITranslationError as exc:
+            assert "sampling parameters" in str(exc)
+        else:
+            raise AssertionError(f"{field} should have been rejected")
+
+
+def test_a_padded_model_is_a_translation_error() -> None:
+    with pytest.raises(OpenAITranslationError, match="model must not"):
+        chat_request_to_job(
+            {
+                "model": " qwen2.5:7b",
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        )
+
+
+def test_boolean_numeric_limits_are_not_treated_as_integers() -> None:
+    job = chat_request_to_job(
+        {
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": True,
+            "horizon_max_acceptable_latency_ms": True,
+        }
+    )
+
+    assert job.payload.parameters.num_predict is None
+    assert job.payload.expected_output_tokens is None
+    assert job.max_acceptable_latency_ms == 120_000
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "max_completion_tokens"])
+def test_malformed_generation_limits_are_translation_errors(field: str) -> None:
+    with pytest.raises(OpenAITranslationError, match=field):
+        chat_request_to_job(
+            {
+                "messages": [{"role": "user", "content": "hello"}],
+                field: "128",
+            }
+        )
+
+
+def test_malformed_latency_extension_is_a_translation_error() -> None:
+    with pytest.raises(OpenAITranslationError, match="horizon_max_acceptable_latency_ms"):
+        chat_request_to_job(
+            {
+                "messages": [{"role": "user", "content": "hello"}],
+                "horizon_max_acceptable_latency_ms": "120000",
+            }
+        )
+
+
+def test_boolean_sampler_values_are_translation_errors() -> None:
+    for field in ("temperature", "top_p", "top_k"):
+        body = {"messages": [{"role": "user", "content": "hello"}], field: True}
+        try:
+            chat_request_to_job(body)
+        except OpenAITranslationError as exc:
+            assert "sampling parameters" in str(exc)
+        else:
+            raise AssertionError(f"{field} should have been rejected")
+
+
+def test_non_wire_sampler_numeric_types_are_translation_errors() -> None:
+    for field, value in (("temperature", "0.5"), ("top_p", "0.5"), ("top_k", 10.5), ("seed", 10.5)):
+        body = {"messages": [{"role": "user", "content": "hello"}], field: value}
+        try:
+            chat_request_to_job(body)
+        except OpenAITranslationError as exc:
+            assert "sampling parameters" in str(exc)
+        else:
+            raise AssertionError(f"{field} should have been rejected")
+
+
+def test_non_string_caller_uses_the_safe_default() -> None:
+    job = chat_request_to_job(
+        {
+            "messages": [{"role": "user", "content": "hello"}],
+            "horizon_caller": {"unexpected": "object"},
+        }
+    )
+
+    assert job.caller == "openai"
+
+
+def test_a_padded_caller_is_a_translation_error() -> None:
+    with pytest.raises(OpenAITranslationError, match="caller must not"):
+        chat_request_to_job(
+            {
+                "messages": [{"role": "user", "content": "hello"}],
+                "horizon_caller": " agent ",
+            }
+        )
 
 
 def test_a_stop_string_becomes_a_tuple() -> None:
@@ -90,6 +205,20 @@ def test_a_stop_string_becomes_a_tuple() -> None:
         }
     )
     assert job.payload.parameters.stop == ("END", "STOP")
+
+
+def test_non_string_stop_values_are_translation_errors() -> None:
+    try:
+        chat_request_to_job(
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "stop": ["END", 7],
+            }
+        )
+    except OpenAITranslationError as exc:
+        assert "stop values" in str(exc)
+    else:
+        raise AssertionError("non-string stop values should have been rejected")
 
 
 def test_the_tier_follows_the_configured_latency_threshold() -> None:
@@ -130,6 +259,16 @@ def test_the_system_prompt_is_sent_once() -> None:
     assert len(system_messages) == 1
     assert system_messages[0]["content"] == "be brief"
     assert [m["role"] for m in request["messages"]] == ["system", "user"]
+
+
+def test_payload_rendering_revalidates_mutated_messages() -> None:
+    job = chat_request_to_job(
+        {"model": "qwen2.5:7b", "messages": [{"role": "user", "content": "hello"}]}
+    )
+    job.payload.messages.append({"role": "user", "content": "corrupt"})
+
+    request = job.payload.to_chat_request()
+    assert request["messages"][-1] == {"role": "user", "content": "corrupt"}
 
 
 def test_a_request_without_a_system_message_is_untouched() -> None:
@@ -195,6 +334,78 @@ async def test_a_streamed_chat_completion_uses_server_sent_events(config: Any) -
             chunk["choices"][0]["delta"].get("content", "") for chunk in chunks
         )
         assert content == "Hi there"
+    finally:
+        await engine.stop()
+        await client.close()
+        await server.close()
+
+
+async def test_a_non_boolean_stream_flag_is_rejected(config: Any) -> None:
+    server, url = await start_fake_ollama()
+    client, _ = await make_client(config, url)
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen2.5:7b",
+                "messages": [{"role": "user", "content": "hello"}],
+                "stream": "false",
+            },
+        )
+        assert response.status == 422
+        assert "stream must be a boolean" in (await response.json())["error"]["message"]
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_a_non_object_chat_body_is_a_bad_request(config: Any) -> None:
+    server, url = await start_fake_ollama()
+    client, _ = await make_client(config, url)
+    try:
+        response = await client.post("/v1/chat/completions", json=[])
+        assert response.status == 400
+        assert (await response.json())["error"]["message"] == "body must be a JSON object"
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_an_infinite_timeout_is_rejected_as_non_standard_json(config: Any) -> None:
+    server, url = await start_fake_ollama(tokens=("ok",))
+    client, engine = await make_client(config, url)
+    await engine.start()
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen2.5:7b",
+                "messages": [{"role": "user", "content": "hello"}],
+                "horizon_timeout_seconds": float("inf"),
+            },
+        )
+        assert response.status == 400
+        assert "valid JSON" in (await response.text())
+    finally:
+        await engine.stop()
+        await client.close()
+        await server.close()
+
+
+async def test_an_overflowing_timeout_uses_the_bounded_default(config: Any) -> None:
+    server, url = await start_fake_ollama(tokens=("ok",))
+    client, engine = await make_client(config, url)
+    await engine.start()
+    try:
+        response = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "qwen2.5:7b",
+                "messages": [{"role": "user", "content": "hello"}],
+                "horizon_timeout_seconds": 10**1000,
+            },
+        )
+        assert response.status == 200
     finally:
         await engine.stop()
         await client.close()

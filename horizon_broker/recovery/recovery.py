@@ -14,6 +14,7 @@ node -- degraded, but never lost.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -26,7 +27,7 @@ from horizon_broker.contracts.errors import (
     MaxAttemptsExceededError,
     RecoveryBudgetExceededError,
 )
-from horizon_broker.contracts.jobs import InferenceJob, JobState, utcnow
+from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState, utcnow
 from horizon_broker.contracts.nodes import NodeCapability
 from horizon_broker.recovery.snapshot_store import SnapshotStore
 
@@ -81,6 +82,8 @@ class RecoveryCoordinator:
         self._dispatch = dispatch
         self._clock = clock
         self._avoid: dict[str, set[str]] = {}
+        self._dispatched: dict[str, tuple[int, RecoveryOutcome]] = {}
+        self._recovery_locks: dict[str, asyncio.Lock] = {}
 
     def avoid_node(self, job_id: str, node_id: str) -> None:
         """Exclude a node from future placement of ``job_id``."""
@@ -90,7 +93,40 @@ class RecoveryCoordinator:
         """Nodes excluded for ``job_id`` so far."""
         return frozenset(self._avoid.get(job_id, set()))
 
+    def forget(self, job_id: str) -> None:
+        """Release placement history after a job reaches a terminal state."""
+        self._avoid.pop(job_id, None)
+        self._dispatched.pop(job_id, None)
+        lock = self._recovery_locks.get(job_id)
+        if lock is None or not lock.locked():
+            self._recovery_locks.pop(job_id, None)
+
     async def recover(
+        self,
+        job: InferenceJob,
+        failed_node_id: str,
+        *,
+        reason: str = "node lost",
+        available_nodes: list[NodeCapability] | None = None,
+    ) -> RecoveryOutcome:
+        """Recover one job while serializing duplicate loss notifications."""
+        lock = self._recovery_locks.setdefault(job.job_id, asyncio.Lock())
+        async with lock:
+            outcome = await self._recover_once(
+                job,
+                failed_node_id,
+                reason=reason,
+                available_nodes=available_nodes,
+            )
+        if self._recovery_locks.get(job.job_id) is lock and job.state in (
+            JobState.COMPLETED,
+            JobState.CANCELLED,
+            JobState.FAILED,
+        ):
+            self._recovery_locks.pop(job.job_id, None)
+        return outcome
+
+    async def _recover_once(
         self,
         job: InferenceJob,
         failed_node_id: str,
@@ -100,6 +136,16 @@ class RecoveryCoordinator:
     ) -> RecoveryOutcome:
         """Recover ``job`` after the loss of ``failed_node_id``."""
         started = self._clock()
+        prior = self._dispatched.get(job.job_id)
+        if prior is not None and prior[0] == job.attempt and job.state in (
+            JobState.QUEUED,
+            JobState.DISPATCHED,
+            JobState.RUNNING,
+        ):
+            # A duplicate loss/replay notification can arrive after the first
+            # dispatch has returned but before the scheduler updates the job
+            # state. Do not increment the attempt or send the same work twice.
+            return prior[1]
         failure: BrokerError | None = None
         self.avoid_node(job.job_id, failed_node_id)
         excluded = self.avoided_nodes(job.job_id)
@@ -110,6 +156,8 @@ class RecoveryCoordinator:
                 f"({job.attempt + 1} of {self.config.max_attempts})"
             )
             job.state = JobState.FAILED
+            job.phase = ExecutionPhase.MONOLITHIC
+            job.assigned_node_id = None
             job.error = str(failure)
             LOGGER.error("job %s failed permanently: %s", job.job_id, job.error)
             return RecoveryOutcome(
@@ -145,6 +193,7 @@ class RecoveryCoordinator:
         # store, the supervisor) must observe the recovered state.
         job.attempt += 1
         job.state = JobState.QUEUED
+        job.phase = ExecutionPhase.MONOLITHIC
         job.assigned_node_id = None
         if resumed and snapshot is not None:
             job.resume_point = snapshot.resume_point
@@ -162,10 +211,26 @@ class RecoveryCoordinator:
         try:
             await self._dispatch(job, excluded)
             dispatched = True
+        except asyncio.CancelledError:
+            # Preserve cancellation semantics for shutdown, but do not strand
+            # the incremented recovery attempt outside the shared queue.
+            job.not_before = utcnow() + timedelta(seconds=5)
+            try:
+                self._requeue(job)
+            except Exception:  # noqa: BLE001 - cancellation remains authoritative
+                LOGGER.exception("could not requeue cancelled recovery for job %s", job.job_id)
+            raise
         except Exception as exc:  # noqa: BLE001 - the job is re-queued and retried later
             LOGGER.error("recovery dispatch failed for job %s: %s", job.job_id, exc)
-            job.not_before = utcnow() + timedelta(seconds=5)
-            self._requeue(job)
+            if job.state in (JobState.COMPLETED, JobState.CANCELLED):
+                # A node callback may publish a terminal result before the
+                # transport reports a contradictory send failure. The result
+                # is authoritative; re-queuing it would resurrect completed
+                # work and make callers observe a second execution.
+                dispatched = True
+            else:
+                job.not_before = utcnow() + timedelta(seconds=5)
+                self._requeue(job)
 
         elapsed = self._clock() - started
         within_budget = elapsed <= self.config.recovery_budget_seconds
@@ -182,7 +247,7 @@ class RecoveryCoordinator:
             snapshot.snapshot_id if snapshot else None,
             elapsed,
         )
-        return RecoveryOutcome(
+        outcome = RecoveryOutcome(
             job_id=job.job_id,
             resumed=resumed,
             snapshot_id=snapshot.snapshot_id if snapshot else None,
@@ -192,3 +257,6 @@ class RecoveryCoordinator:
             excluded_node_ids=excluded,
             failure=failure,
         )
+        if dispatched and job.state not in (JobState.COMPLETED, JobState.CANCELLED, JobState.FAILED):
+            self._dispatched[job.job_id] = (job.attempt, outcome)
+        return outcome

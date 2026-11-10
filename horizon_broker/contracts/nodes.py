@@ -7,11 +7,14 @@ power headroom that gates sleep-time compute on the solar trailer.
 
 from __future__ import annotations
 
+import json
+import math
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlparse
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from horizon_broker.contracts.jobs import BrokerModel
 
@@ -99,11 +102,117 @@ class NodeCapability(BrokerModel):
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("last_heartbeat_at", "quarantined_until")
+    @classmethod
+    def _require_tz(cls, value: datetime | None) -> datetime | None:
+        """Keep watchdog comparisons safe across node and broker clocks."""
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("node timestamps must be timezone-aware")
+        return value
+
     @model_validator(mode="before")
     @classmethod
     def _check_envelope(cls, data: Any) -> Any:
-        """Reject impossible memory/batch envelopes before the model is built."""
+        """Reject ambiguous numeric telemetry before it can reach routing."""
         if isinstance(data, dict):
+            node_id = data.get("node_id")
+            if not isinstance(node_id, str) or not node_id.strip():
+                raise ValueError("node_id must not be empty")
+            if node_id != node_id.strip():
+                raise ValueError("node_id must not have surrounding whitespace")
+            for field_name in ("is_prefill_optimized", "is_decode_optimized"):
+                if field_name in data and not isinstance(data[field_name], bool):
+                    raise ValueError(f"{field_name} must be a boolean")
+            whitelist = data.get("model_whitelist")
+            if whitelist is not None and (
+                not isinstance(whitelist, (list, tuple))
+                or not all(
+                    isinstance(model, str)
+                    and model.strip()
+                    and model == model.strip()
+                    for model in whitelist
+                )
+            ):
+                raise ValueError("model_whitelist entries must be canonical non-empty strings")
+            if isinstance(whitelist, (list, tuple)) and len(set(whitelist)) != len(whitelist):
+                raise ValueError("model_whitelist entries must not contain duplicates")
+            assigned_job_ids = data.get("assigned_job_ids")
+            if assigned_job_ids is not None:
+                if not isinstance(assigned_job_ids, (list, tuple)) or not all(
+                    isinstance(job_id, str)
+                    and job_id.strip()
+                    and job_id == job_id.strip()
+                    for job_id in assigned_job_ids
+                ):
+                    raise ValueError("assigned_job_ids must contain canonical non-empty strings")
+                if len(set(assigned_job_ids)) != len(assigned_job_ids):
+                    raise ValueError("assigned_job_ids must not contain duplicates")
+            for field_name, schemes in (
+                ("endpoint", {"http", "https"}),
+                ("ollama_url", {"http", "https"}),
+                ("agent_ws_url", {"ws", "wss"}),
+            ):
+                url = data.get(field_name)
+                if url is not None:
+                    try:
+                        parsed = urlparse(url) if isinstance(url, str) else None
+                    except ValueError:
+                        parsed = None
+                    try:
+                        valid_port = parsed is not None and (
+                            parsed.port is None or 1 <= parsed.port <= 65_535
+                        )
+                    except ValueError:
+                        valid_port = False
+                    if (
+                        parsed is None
+                        or url != url.strip()
+                        or parsed.scheme not in schemes
+                        or not parsed.netloc
+                        or not parsed.hostname
+                        or parsed.username is not None
+                        or parsed.password is not None
+                        or not valid_port
+                    ):
+                        expected = "/".join(sorted(schemes)).upper()
+                        raise ValueError(f"{field_name} must be an absolute {expected} URL")
+            numeric_fields = (
+                "available_vram_bytes",
+                "total_vram_bytes",
+                "current_batch_size",
+                "max_batch_size",
+                "tokens_per_second",
+                "power_headroom",
+            )
+            for field_name in numeric_fields:
+                if isinstance(data.get(field_name), bool):
+                    raise ValueError(f"{field_name} must be numeric, not boolean")
+            for field_name in (
+                "available_vram_bytes",
+                "total_vram_bytes",
+                "current_batch_size",
+                "max_batch_size",
+            ):
+                if field_name in data and not isinstance(data.get(field_name), int):
+                    raise ValueError(f"{field_name} must be an integer")
+            for field_name in ("tokens_per_second", "power_headroom"):
+                value = data.get(field_name)
+                if value is None:
+                    continue
+                if not isinstance(value, (int, float)):
+                    raise ValueError(f"{field_name} must be numeric")
+                try:
+                    finite = math.isfinite(float(value))
+                except (OverflowError, ValueError):
+                    finite = False
+                if not finite:
+                    raise ValueError(f"{field_name} must be finite")
+            metadata = data.get("metadata")
+            if metadata is not None:
+                try:
+                    json.dumps(metadata, allow_nan=False)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("metadata must contain only JSON-safe values") from exc
             total = data.get("total_vram_bytes")
             available = data.get("available_vram_bytes")
             if isinstance(total, int) and isinstance(available, int) and available > total:
@@ -129,6 +238,13 @@ class NodeCapability(BrokerModel):
     def batch_headroom(self) -> int:
         """Number of additional jobs the node can accept."""
         return max(0, self.max_batch_size - self.current_batch_size)
+
+    @property
+    def supports_batch(self) -> bool:
+        """Whether this node explicitly opts into the batch assignment frame."""
+        return self.execution_mode is ExecutionMode.AGENT_CONTAINER and self.metadata.get(
+            "supports_batch"
+        ) is True
 
     def supports_model(self, model: str) -> bool:
         """True when the node is allowed to serve ``model``."""

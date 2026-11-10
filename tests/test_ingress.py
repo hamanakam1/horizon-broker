@@ -5,11 +5,35 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-from horizon_broker.ingress.app import create_app
+from horizon_broker.ingress.app import JSON, _job_list_limit, _stream_completion, create_app
 from horizon_broker.scheduler.engine import BrokerEngine
-from tests.conftest import make_node
+from tests.conftest import make_job, make_node
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", 100),
+        ("0", 0),
+        ("1001", 1000),
+        ("-1", 100),
+        ("+1", 100),
+        ("1_0", 100),
+        ("９", 100),
+        ("9" * 21, 100),
+        ("nope", 100),
+    ],
+)
+def test_job_list_limit_is_bounded_and_canonical(raw: str, expected: int) -> None:
+    assert _job_list_limit(raw) == expected
+
+
+def test_api_json_rejects_non_finite_numbers() -> None:
+    with pytest.raises(ValueError, match="Out of range float values"):
+        JSON({"power_headroom": float("nan")})
 
 
 async def make_client(config: Any) -> tuple[TestClient, BrokerEngine]:
@@ -20,6 +44,53 @@ async def make_client(config: Any) -> tuple[TestClient, BrokerEngine]:
     client = TestClient(TestServer(app))
     await client.start_server()
     return client, engine
+
+
+async def test_stream_setup_failure_unsubscribes_the_job(config: Any, monkeypatch) -> None:
+    """A disconnect while preparing SSE must not leave a subscriber behind."""
+    engine = BrokerEngine(config)
+    job = make_job()
+    engine._jobs[job.job_id] = job
+
+    class FailingResponse:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def prepare(self, _request: Any) -> None:
+            raise RuntimeError("synthetic response setup failure")
+
+    monkeypatch.setattr("horizon_broker.ingress.app.web.StreamResponse", FailingResponse)
+
+    with pytest.raises(RuntimeError, match="response setup failure"):
+        await _stream_completion(object(), engine, job, timeout=None)
+
+    assert job.job_id not in engine._chunk_subscribers
+
+
+async def test_initial_stream_write_failure_unsubscribes_the_job(
+    config: Any, monkeypatch
+) -> None:
+    """A failure writing the opening SSE frame also releases the subscriber."""
+    engine = BrokerEngine(config)
+    job = make_job()
+    engine._jobs[job.job_id] = job
+
+    class FailingResponse:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def prepare(self, _request: Any) -> None:
+            return None
+
+        async def write(self, _payload: bytes) -> None:
+            raise RuntimeError("synthetic initial stream write failure")
+
+    monkeypatch.setattr("horizon_broker.ingress.app.web.StreamResponse", FailingResponse)
+
+    with pytest.raises(RuntimeError, match="initial stream write failure"):
+        await _stream_completion(object(), engine, job, timeout=None)
+
+    assert job.job_id not in engine._chunk_subscribers
 
 
 async def test_a_job_is_accepted(config: Any) -> None:
@@ -41,6 +112,24 @@ async def test_a_job_is_accepted(config: Any) -> None:
         assert status.status == 200
         payload = await status.json()
         assert payload["payload"]["model"] == "qwen2.5:7b"
+    finally:
+        await client.close()
+
+
+async def test_a_non_queued_submission_state_is_rejected(config: Any) -> None:
+    client, _ = await make_client(config)
+    try:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "state": "completed",
+                "payload": {"model": "qwen2.5:7b", "prompt": "replay only"},
+                "max_acceptable_latency_ms": 1_000,
+            },
+        )
+        assert response.status == 422
+        body = await response.json()
+        assert "must start queued" in body["details"][0]
     finally:
         await client.close()
 
@@ -88,6 +177,30 @@ async def test_an_invalid_job_is_rejected(config: Any) -> None:
         await client.close()
 
 
+async def test_an_empty_model_identifier_is_rejected(config: Any) -> None:
+    client, _ = await make_client(config)
+    try:
+        response = await client.post("/v1/jobs", json={"payload": {"model": "   "}})
+        assert response.status == 422
+    finally:
+        await client.close()
+
+
+async def test_a_boolean_latency_budget_is_rejected(config: Any) -> None:
+    client, _ = await make_client(config)
+    try:
+        response = await client.post(
+            "/v1/jobs",
+            json={
+                "payload": {"model": "qwen2.5:7b", "prompt": "hello"},
+                "max_acceptable_latency_ms": True,
+            },
+        )
+        assert response.status == 422
+    finally:
+        await client.close()
+
+
 async def test_an_unknown_job_is_a_404(config: Any) -> None:
     client, _ = await make_client(config)
     try:
@@ -119,7 +232,10 @@ async def test_health_and_metrics(config: Any) -> None:
         assert (await client.get("/readyz")).status == 200
         metrics = await client.get("/metrics")
         assert metrics.status == 200
-        assert "horizon_jobs_submitted_total" in await metrics.text()
+        rendered = await metrics.text()
+        assert "horizon_jobs_submitted_total" in rendered
+        assert 'horizon_ledger_fallback_total{reason="query"}' in rendered
+        assert "horizon_journal_replay_failures_total 0.0" in rendered
     finally:
         await client.close()
 
@@ -142,6 +258,53 @@ async def test_a_node_can_announce_itself_over_http(config: Any) -> None:
         assert node is not None
         assert node.is_decode_optimized is True
         assert node.last_heartbeat_at is not None
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize("field", [
+    "available_vram_bytes",
+    "total_vram_bytes",
+    "current_batch_size",
+    "max_batch_size",
+    "tokens_per_second",
+    "power_headroom",
+])
+async def test_a_heartbeat_rejects_boolean_numeric_telemetry(config: Any, field: str) -> None:
+    """Boolean JSON values must not be coerced into trusted capacity telemetry."""
+    client, engine = await make_client(config)
+    try:
+        response = await client.post(
+            "/v1/nodes/pi-boolean/heartbeat",
+            json={
+                "available_vram_bytes": 4_000_000_000,
+                "total_vram_bytes": 8_000_000_000,
+                "max_batch_size": 2,
+                field: True,
+            },
+        )
+        assert response.status == 422
+        assert engine.registry.get("pi-boolean") is None
+    finally:
+        await client.close()
+
+
+@pytest.mark.parametrize("field", ["is_prefill_optimized", "is_decode_optimized"])
+async def test_a_heartbeat_rejects_non_boolean_capability_flags(config: Any, field: str) -> None:
+    """Capability flags must not accept numeric truthiness from untrusted nodes."""
+    client, engine = await make_client(config)
+    try:
+        response = await client.post(
+            "/v1/nodes/pi-flag/heartbeat",
+            json={
+                "available_vram_bytes": 4_000_000_000,
+                "total_vram_bytes": 8_000_000_000,
+                "max_batch_size": 2,
+                field: 1,
+            },
+        )
+        assert response.status == 422
+        assert engine.registry.get("pi-flag") is None
     finally:
         await client.close()
 
@@ -209,6 +372,16 @@ async def test_the_job_list_is_exposed(config: Any) -> None:
         body = await truncated.json()
         assert body["total"] == 2
         assert body["count"] == 1
+
+        malformed = await client.get("/v1/jobs", params={"limit": "²"})
+        assert malformed.status == 200
+        body = await malformed.json()
+        assert body["count"] == 2
+
+        empty = await client.get("/v1/jobs", params={"limit": "0"})
+        assert empty.status == 200
+        body = await empty.json()
+        assert body["count"] == 0
     finally:
         await client.close()
 
