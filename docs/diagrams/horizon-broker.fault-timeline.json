@@ -40,6 +40,6 @@
   "cards": [
     { "dot": "amber", "title": "These are the designed budgets", "items": ["The times come from the documented fault timeline, not from a recorded incident", "The evidence flag is illustrative on purpose: no trace was captured", "The real detector is heartbeat.timeout_seconds, six seconds by default"] },
     { "dot": "emerald", "title": "What the timeline protects", "items": ["Detection costs the silence window, which is why the heartbeat interval is two seconds", "The recovery work itself is under half a second in the design", "The thirty-second recovery budget is the outer bound, not the expectation"] },
-    { "dot": "rose", "title": "Where the plan still leaks", "items": ["The quarantine never expires, so a node that failed once never returns to the pool", "A transient socket drop fails the running job instead of waiting for the verdict", "Phase 0 of the roadmap closes both"] }
+    { "dot": "cyan", "title": "What is implemented", "items": ["A transient socket drop remains non-terminal until the watchdog reports a node verdict", "A lost node is quarantined only for recovery.quarantine_seconds", "The watchdog reports; the supervisor and recovery coordinator own the next action"] }
   ]
 }

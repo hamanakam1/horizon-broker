@@ -13,10 +13,13 @@ ledger or Ollama endpoint without rewriting a file.
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from string import Formatter
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -135,6 +138,8 @@ class LedgerConfig:
     enabled: bool = True
     base_url: str = "http://127.0.0.1:8787"
     collection: str = "horizon_broker.snapshots"
+    owner_id: str = "horizon-broker"
+    """Stable broker identity used to scope shared recovery records."""
     timeout_seconds: float = 5.0
     commit_path: str = "/collections/{collection}/records"
     query_path: str = "/collections/{collection}/records"
@@ -187,6 +192,66 @@ class BrokerConfig:
         Failing here is better than a broker that accepts work it cannot run.
         """
         problems: list[str] = []
+        boolean_fields = (
+            ("window.idle_flush", self.window.idle_flush),
+            ("ledger.enabled", self.ledger.enabled),
+        )
+        for name, boolean_value in boolean_fields:
+            if not isinstance(boolean_value, bool):
+                problems.append(f"{name} must be a boolean")
+        integer_fields = (
+            ("port", self.port),
+            ("journal_max_bytes", self.journal_max_bytes),
+            ("heartbeat.missed_beats_before_loss", self.heartbeat.missed_beats_before_loss),
+            ("window.min_batch_size", self.window.min_batch_size),
+            ("window.max_batch_size", self.window.max_batch_size),
+            ("scheduling.interactive_concurrency", self.scheduling.interactive_concurrency),
+            ("scheduling.flex_concurrency", self.scheduling.flex_concurrency),
+            ("scheduling.interactive_latency_threshold_ms", self.scheduling.interactive_latency_threshold_ms),
+            ("scheduling.max_queue_depth", self.scheduling.max_queue_depth),
+            ("routing.prefill_prompt_threshold", self.routing.prefill_prompt_threshold),
+            ("routing.decode_output_threshold", self.routing.decode_output_threshold),
+            ("recovery.max_attempts", self.recovery.max_attempts),
+            ("recovery.checkpoint_every_tokens", self.recovery.checkpoint_every_tokens),
+            ("ledger.max_retries", self.ledger.max_retries),
+        )
+        for name, integer_value in integer_fields:
+            if isinstance(integer_value, bool) or not isinstance(integer_value, int):
+                problems.append(f"{name} must be an integer")
+        float_fields: tuple[tuple[str, object], ...] = (
+            ("heartbeat.interval_seconds", self.heartbeat.interval_seconds),
+            ("heartbeat.timeout_seconds", self.heartbeat.timeout_seconds),
+            ("heartbeat.reconnect_backoff_seconds", self.heartbeat.reconnect_backoff_seconds),
+            ("heartbeat.reconnect_backoff_max_seconds", self.heartbeat.reconnect_backoff_max_seconds),
+            ("window.window_seconds", self.window.window_seconds),
+            ("window.min_dwell_seconds", self.window.min_dwell_seconds),
+            ("window.power_headroom_threshold", self.window.power_headroom_threshold),
+            ("window.idle_flush_seconds", self.window.idle_flush_seconds),
+            ("scheduling.poll_interval_seconds", self.scheduling.poll_interval_seconds),
+            ("routing.prefill_intensity_ratio", self.routing.prefill_intensity_ratio),
+            ("routing.decode_intensity_ratio", self.routing.decode_intensity_ratio),
+            ("recovery.recovery_budget_seconds", self.recovery.recovery_budget_seconds),
+            ("recovery.checkpoint_every_seconds", self.recovery.checkpoint_every_seconds),
+            ("recovery.quarantine_seconds", self.recovery.quarantine_seconds),
+            ("ledger.timeout_seconds", self.ledger.timeout_seconds),
+            ("ledger.retry_backoff_seconds", self.ledger.retry_backoff_seconds),
+            ("ollama.timeout_seconds", self.ollama.timeout_seconds),
+            ("drain_timeout_seconds", self.drain_timeout_seconds),
+        )
+        for name, float_value in float_fields:
+            finite = False
+            if isinstance(float_value, (int, float)) and not isinstance(float_value, bool):
+                try:
+                    finite = math.isfinite(float(float_value))
+                except (OverflowError, ValueError):
+                    finite = False
+            if not finite:
+                problems.append(f"{name} must be a finite number")
+        # The range checks below rely on numeric ordering. Stop here when a
+        # primitive type is already invalid so malformed configuration is
+        # reported as configuration errors rather than leaking TypeError.
+        if problems:
+            raise ValueError("invalid configuration: " + "; ".join(problems))
         if self.window.min_batch_size < 1:
             problems.append("window.min_batch_size must be at least 1")
         if self.window.max_batch_size < self.window.min_batch_size:
@@ -199,22 +264,121 @@ class BrokerConfig:
             problems.append("window.min_dwell_seconds must not be negative")
         if self.window.idle_flush_seconds < 0:
             problems.append("window.idle_flush_seconds must not be negative")
+        if not 0.0 <= self.window.power_headroom_threshold <= 1.0:
+            problems.append("window.power_headroom_threshold must be between 0 and 1")
+        valid_power_classes = {power_class.value for power_class in PowerClass}
+        unknown_power_classes = set(self.window.power_gated_tiers) - valid_power_classes
+        if unknown_power_classes:
+            problems.append(
+                "window.power_gated_tiers contains unsupported values: "
+                + ", ".join(sorted(unknown_power_classes))
+            )
+        if self.routing.prefill_prompt_threshold < 0:
+            problems.append("routing.prefill_prompt_threshold must not be negative")
+        if self.routing.decode_output_threshold < 0:
+            problems.append("routing.decode_output_threshold must not be negative")
+        if self.routing.prefill_intensity_ratio <= 0:
+            problems.append("routing.prefill_intensity_ratio must be positive")
+        if self.routing.decode_intensity_ratio <= 0:
+            problems.append("routing.decode_intensity_ratio must be positive")
+        if self.recovery.checkpoint_every_tokens < 1:
+            problems.append("recovery.checkpoint_every_tokens must be at least 1")
+        if self.recovery.checkpoint_every_seconds <= 0:
+            problems.append("recovery.checkpoint_every_seconds must be positive")
         if self.scheduling.interactive_concurrency < 1:
             problems.append("scheduling.interactive_concurrency must be at least 1")
         if self.scheduling.flex_concurrency < 1:
             problems.append("scheduling.flex_concurrency must be at least 1")
+        if self.heartbeat.missed_beats_before_loss < 1:
+            problems.append("heartbeat.missed_beats_before_loss must be at least 1")
         if self.scheduling.max_queue_depth < 1:
             problems.append("scheduling.max_queue_depth must be at least 1")
         if self.recovery.max_attempts < 1:
             problems.append("recovery.max_attempts must be at least 1")
         if self.recovery.recovery_budget_seconds <= 0:
             problems.append("recovery.recovery_budget_seconds must be positive")
+        if self.heartbeat.interval_seconds <= 0:
+            problems.append("heartbeat.interval_seconds must be positive")
+        if self.heartbeat.reconnect_backoff_seconds < 0:
+            problems.append("heartbeat.reconnect_backoff_seconds must not be negative")
+        if self.heartbeat.reconnect_backoff_max_seconds < 0:
+            problems.append("heartbeat.reconnect_backoff_max_seconds must not be negative")
+        if self.heartbeat.reconnect_backoff_max_seconds < self.heartbeat.reconnect_backoff_seconds:
+            problems.append(
+                "heartbeat.reconnect_backoff_max_seconds must be at least reconnect_backoff_seconds"
+            )
+        if self.scheduling.poll_interval_seconds <= 0:
+            problems.append("scheduling.poll_interval_seconds must be positive")
         if self.heartbeat.timeout_seconds <= self.heartbeat.interval_seconds:
             problems.append(
                 "heartbeat.timeout_seconds must be greater than heartbeat.interval_seconds"
             )
         if self.drain_timeout_seconds < 0:
             problems.append("drain_timeout_seconds must not be negative")
+        if not 1 <= self.port <= 65_535:
+            problems.append("port must be between 1 and 65535")
+        if self.journal_max_bytes < 1:
+            problems.append("journal_max_bytes must be at least 1")
+        if self.ledger.timeout_seconds <= 0:
+            problems.append("ledger.timeout_seconds must be positive")
+        if self.ledger.max_retries < 0:
+            problems.append("ledger.max_retries must not be negative")
+        if self.ledger.retry_backoff_seconds < 0:
+            problems.append("ledger.retry_backoff_seconds must not be negative")
+        if self.ollama.timeout_seconds <= 0:
+            problems.append("ollama.timeout_seconds must be positive")
+        for name, value in (
+            ("ledger.owner_id", self.ledger.owner_id),
+            ("ledger.collection", self.ledger.collection),
+            ("ledger.commit_path", self.ledger.commit_path),
+            ("ledger.query_path", self.ledger.query_path),
+            ("ledger.auth_token_env", self.ledger.auth_token_env),
+            ("ledger.auth_header", self.ledger.auth_header),
+            ("ledger.auth_scheme", self.ledger.auth_scheme),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                problems.append(f"{name} must not be empty")
+            elif value != value.strip():
+                problems.append(f"{name} must not have surrounding whitespace")
+        for name, path in (
+            ("ledger.commit_path", self.ledger.commit_path),
+            ("ledger.query_path", self.ledger.query_path),
+        ):
+            if not _is_ledger_route_template(path):
+                problems.append(f"{name} must be an absolute path containing {{collection}}")
+        if not isinstance(self.host, str) or not self.host.strip():
+            problems.append("host must not be empty")
+        if not isinstance(self.log_level, str) or self.log_level.upper() not in {
+            "CRITICAL",
+            "ERROR",
+            "WARNING",
+            "INFO",
+            "DEBUG",
+        }:
+            problems.append("log_level must be one of CRITICAL, ERROR, WARNING, INFO, DEBUG")
+        for name, base_url in (
+            ("ledger.base_url", self.ledger.base_url),
+            ("ollama.base_url", self.ollama.base_url),
+        ):
+            try:
+                parsed = urlparse(base_url) if isinstance(base_url, str) else None
+                parsed_port = parsed.port if parsed is not None else None
+                valid_port = parsed_port is None or 1 <= parsed_port <= 65_535
+            except ValueError:
+                parsed = None
+                valid_port = False
+            if (
+                not isinstance(base_url, str)
+                or base_url != base_url.strip()
+                or parsed is None
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or not valid_port
+            ):
+                problems.append(f"{name} must be an absolute HTTP(S) URL")
         seen: set[str] = set()
         for node in self.static_nodes:
             if node.node_id in seen:
@@ -229,10 +393,35 @@ def _env(name: str) -> str | None:
     return value if value not in (None, "") else None
 
 
+def _is_ledger_route_template(value: Any) -> bool:
+    """Keep ledger route interpolation limited to one path placeholder."""
+    if not isinstance(value, str) or not value.startswith("/"):
+        return False
+    if "?" in value or "#" in value:
+        return False
+    try:
+        fields = list(Formatter().parse(value))
+    except ValueError:
+        return False
+    collection_fields = 0
+    for _, field_name, format_spec, conversion in fields:
+        if field_name is None:
+            continue
+        if field_name != "collection" or format_spec or conversion:
+            return False
+        collection_fields += 1
+    return collection_fields == 1
+
+
 def _coerce(raw: Any, current: Any) -> Any:
     """Coerce an environment string into the type of the current value."""
     if isinstance(current, bool):
-        return str(raw).strip().lower() in ("1", "true", "yes", "on")
+        normalized = str(raw).strip().lower()
+        if normalized in ("1", "true", "yes", "on"):
+            return True
+        if normalized in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"invalid boolean environment value: {raw!r}")
     if isinstance(current, int) and not isinstance(current, bool):
         return int(raw)
     if isinstance(current, float):
@@ -251,6 +440,7 @@ def _apply_env_overrides(config: BrokerConfig) -> BrokerConfig:
         "JOURNAL_PATH": ("journal_path", config.journal_path),
         "OLLAMA_BASE_URL": ("ollama", config.ollama),
         "LEDGER_BASE_URL": ("ledger", config.ledger),
+        "LEDGER_OWNER_ID": ("ledger_owner_id", config.ledger),
     }
     for suffix, (attribute, current) in mapping.items():
         raw = _env(suffix)
@@ -260,7 +450,8 @@ def _apply_env_overrides(config: BrokerConfig) -> BrokerConfig:
         if isinstance(current, OllamaConfig):
             config = replace(config, ollama=replace(current, base_url=value))
         elif isinstance(current, LedgerConfig):
-            config = replace(config, ledger=replace(current, base_url=value))
+            field = "owner_id" if attribute == "ledger_owner_id" else "base_url"
+            config = replace(config, ledger=replace(current, **{field: value}))
         else:
             config = replace(config, **{attribute: value})
 
@@ -305,8 +496,25 @@ def _node_from_mapping(raw: dict[str, Any]) -> NodeCapability:
     if "execution_mode" in data:
         data["execution_mode"] = ExecutionMode(str(data["execution_mode"]))
     if "model_whitelist" in data:
+        if isinstance(data["model_whitelist"], str) or not isinstance(
+            data["model_whitelist"], (list, tuple)
+        ):
+            raise ValueError("node model_whitelist must be a sequence of model names")
         data["model_whitelist"] = tuple(data["model_whitelist"])
     return NodeCapability.model_validate(data)
+
+
+def _string_tuple(value: Any, field_name: str) -> tuple[str, ...]:
+    """Validate a YAML sequence without turning scalar strings into characters."""
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a sequence of strings")
+    if not all(
+        isinstance(item, str) and item.strip() and item == item.strip() for item in value
+    ):
+        raise ValueError(f"{field_name} entries must be canonical non-empty strings")
+    if len(set(value)) != len(value):
+        raise ValueError(f"{field_name} entries must not contain duplicates")
+    return tuple(value)
 
 
 def load_config(path: str | Path | None = None) -> BrokerConfig:
@@ -331,8 +539,9 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
         # the window length must not switch power gating off.
         window = {
             **window,
-            "power_gated_tiers": tuple(
-                window.get("power_gated_tiers", config.window.power_gated_tiers)
+            "power_gated_tiers": _string_tuple(
+                window.get("power_gated_tiers", config.window.power_gated_tiers),
+                "window.power_gated_tiers",
             ),
         }
         config = replace(config, window=replace(config.window, **window))
@@ -343,7 +552,12 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
 
     routing = data.get("routing")
     if isinstance(routing, dict):
-        routing = {**routing, "kv_handoff_models": tuple(routing.get("kv_handoff_models", ()))}
+        routing = {
+            **routing,
+            "kv_handoff_models": _string_tuple(
+                routing.get("kv_handoff_models", ()), "routing.kv_handoff_models"
+            ),
+        }
         config = replace(config, routing=replace(config.routing, **routing))
 
     recovery = data.get("recovery")
@@ -363,15 +577,11 @@ def load_config(path: str | Path | None = None) -> BrokerConfig:
         config = replace(
             config,
             host=broker.get("host", config.host),
-            port=int(broker.get("port", config.port)),
+            port=broker.get("port", config.port),
             log_level=broker.get("log_level", config.log_level),
             journal_path=broker.get("journal_path", config.journal_path),
-            journal_max_bytes=int(
-                broker.get("journal_max_bytes", config.journal_max_bytes)
-            ),
-            drain_timeout_seconds=float(
-                broker.get("drain_timeout_seconds", config.drain_timeout_seconds)
-            ),
+            journal_max_bytes=broker.get("journal_max_bytes", config.journal_max_bytes),
+            drain_timeout_seconds=broker.get("drain_timeout_seconds", config.drain_timeout_seconds),
         )
 
     raw_nodes = data.get("nodes") or []
@@ -404,4 +614,5 @@ def dump_config(config: BrokerConfig) -> str:
         },
         indent=2,
         sort_keys=True,
+        allow_nan=False,
     )

@@ -15,16 +15,33 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
-from typing import Any
+from typing import Any, NoReturn
 
 import aiohttp
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8791"
 
 
+def _reject_json_constant(value: str) -> NoReturn:
+    """Reject Python-specific non-standard JSON numeric constants."""
+    raise ValueError(f"non-standard JSON constant: {value}")
+
+
 def _base_url(args: argparse.Namespace) -> str:
     return str(args.base_url).rstrip("/")
+
+
+def _positive_timeout(raw: str) -> float:
+    """Parse a finite, positive operator request timeout."""
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("timeout must be a number") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("timeout must be finite and positive")
+    return value
 
 
 async def _request(
@@ -39,17 +56,56 @@ async def _request(
         async with session.request(method, url, json=payload) as response:
             text = await response.text()
             try:
-                body = json.loads(text) if text else None
-            except json.JSONDecodeError:
+                body = (
+                    json.loads(text, parse_constant=_reject_json_constant) if text else None
+                )
+            except (json.JSONDecodeError, ValueError):
                 body = text
             return response.status, body
 
 
 def _print(body: Any) -> None:
     if isinstance(body, (dict, list)):
-        print(json.dumps(body, indent=2, ensure_ascii=False))
+        print(json.dumps(body, indent=2, ensure_ascii=False, allow_nan=False))
     else:
         print(body)
+
+
+def _display_power(value: Any) -> str:
+    """Render untrusted node telemetry without crashing the operator CLI."""
+    if isinstance(value, bool):
+        return "-"
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return "-"
+    return f"{numeric:.2f}" if math.isfinite(numeric) else "-"
+
+
+def _display_models(value: Any) -> str:
+    """Render an untrusted model whitelist without assuming its shape."""
+    if not isinstance(value, list):
+        return "any"
+    models: list[str] = []
+    for model in value:
+        if (
+            isinstance(model, str)
+            and model
+            and model == model.strip()
+            and model not in models
+        ):
+            models.append(model)
+    return ",".join(models) or "any"
+
+
+def _is_positive_finite_number(value: Any) -> bool:
+    """Recognize numeric counters without boolean or overflow coercion."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value)) and value > 0
+    except (OverflowError, ValueError):
+        return False
 
 
 async def cmd_job_submit(args: argparse.Namespace) -> int:
@@ -110,8 +166,14 @@ async def cmd_job_list(args: argparse.Namespace) -> int:
     if not isinstance(response, dict):
         _print(response)
         return 0
-    total = int(response.get("total", 0))
+    raw_total = response.get("total", 0)
+    try:
+        total = 0 if isinstance(raw_total, bool) else max(0, int(raw_total))
+    except (TypeError, ValueError, OverflowError):
+        total = 0
     jobs = response.get("jobs", [])
+    if not isinstance(jobs, list):
+        jobs = []
     print(f"{len(jobs)} of {total} job(s), newest first")
     print(f"{'JOB':<20} {'STATE':<11} {'TIER':<12} {'MODEL':<16} NODE")
     for job in jobs:
@@ -135,6 +197,18 @@ async def cmd_queue(args: argparse.Namespace) -> int:
     if status != 200:
         print(f"the broker did not answer (HTTP {status})", file=sys.stderr)
         return 1
+    if isinstance(response, dict):
+        batches = response.get("batches")
+        if isinstance(batches, dict):
+            rejected = batches.get("rejected", 0)
+            print(
+                "batch: "
+                f"active={batches.get('active_members', 0)} "
+                f"admitted={batches.get('admitted', 0)} "
+                f"rejected={rejected}"
+            )
+            if _is_positive_finite_number(rejected):
+                print("warning: one or more batch admissions were rejected", file=sys.stderr)
     _print(response)
     return 0
 
@@ -151,9 +225,11 @@ async def cmd_nodes(args: argparse.Namespace) -> int:
         return 0
     print(f"{'NODE':<20} {'ROLE':<9} {'HEALTH':<9} {'BATCH':<7} {'POWER':<7} MODELS")
     for node in nodes:
+        if not isinstance(node, dict):
+            continue
         batch = f"{node.get('current_batch_size', 0)}/{node.get('max_batch_size', 0)}"
-        power = f"{float(node.get('power_headroom', 0)):.2f}"
-        models = ",".join(node.get("model_whitelist") or []) or "any"
+        power = _display_power(node.get("power_headroom", 0))
+        models = _display_models(node.get("model_whitelist"))
         print(
             f"{node.get('node_id', ''):<20} {node.get('role', ''):<9} "
             f"{node.get('health', ''):<9} {batch:<7} {power:<7} {models}"
@@ -172,7 +248,12 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the command line parser."""
     parser = argparse.ArgumentParser(prog="horizon-broker-cli", description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="broker base URL")
-    parser.add_argument("--timeout", type=float, default=30.0, help="request timeout in seconds")
+    parser.add_argument(
+        "--timeout",
+        type=_positive_timeout,
+        default=30.0,
+        help="request timeout in seconds",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     job = subparsers.add_parser("job", help="work with jobs")

@@ -7,9 +7,11 @@ four frame families:
     Liveness. The broker pings every ``interval_seconds``; the node answers
     with a ``heartbeat`` frame carrying its current capability snapshot.
 
-``assign`` / ``cancel``
-    Work. The broker sends ``assign`` with the job envelope and the resume
-    state; the node answers with ``progress``/``checkpoint``/``complete``.
+``assign`` / ``batch_assign`` / ``cancel``
+    Work. The broker sends ``assign`` for one job or ``batch_assign`` for an
+    explicitly batch-capable agent container. Each item carries its job
+    envelope and resume state; the node answers with
+    ``progress``/``checkpoint``/``complete`` keyed by ``job_id``.
 
 ``checkpoint``
     Recovery state: decode step, partial tokens and the KV-cache reference.
@@ -31,7 +33,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, NoReturn
 
 import aiohttp
 
@@ -106,18 +108,27 @@ class NodeConnection:
     async def close(self) -> None:
         """Close the socket and the session (when owned)."""
         self._closing = True
-        if self._ws is not None and not self._ws.closed:
-            await self._ws.close()
-        self._connected = False
-        if self._session is not None and self._owns_session:
-            await self._session.close()
-            self._session = None
+        try:
+            if self._ws is not None and not self._ws.closed:
+                await self._ws.close()
+        finally:
+            self._connected = False
+            if self._session is not None and self._owns_session:
+                session = self._session
+                try:
+                    await session.close()
+                finally:
+                    # A failed close must not leave a poisoned session
+                    # available to a later reconnect or shutdown attempt.
+                    self._session = None
 
     async def send(self, frame: dict[str, Any]) -> None:
         """Send a JSON frame to the node."""
         if self._ws is None or self._ws.closed:
             raise NodeUnreachableError(f"node {self.node_id} is not connected")
-        await self._ws.send_str(json.dumps(frame, separators=(",", ":")))
+        await self._ws.send_str(
+            json.dumps(frame, separators=(",", ":"), allow_nan=False)
+        )
 
     async def run(self) -> None:
         """Connect, serve frames, and reconnect with exponential backoff."""
@@ -143,8 +154,23 @@ class NodeConnection:
             self._ws = ws
             self._connected = True
             LOGGER.info("node %s connected", self.node_id)
-            await self.send({"type": "ping", "ts": utcnow().isoformat()})
-            ping_task = asyncio.create_task(self._ping_loop())
+            try:
+                await self.send({"type": "ping", "ts": utcnow().isoformat()})
+            except BaseException:
+                # The receive-loop cleanup below has not been entered yet. A
+                # failed initial ping must still leave reconnect and health
+                # reporting with an honest channel state.
+                self._connected = False
+                self._ws = None
+                raise
+            ping = self._ping_loop()
+            try:
+                ping_task = asyncio.create_task(ping)
+            except BaseException:
+                ping.close()
+                self._connected = False
+                self._ws = None
+                raise
             try:
                 while True:
                     try:
@@ -169,6 +195,7 @@ class NodeConnection:
                         )
             finally:
                 ping_task.cancel()
+                await asyncio.gather(ping_task, return_exceptions=True)
                 self._connected = False
                 self._ws = None
 
@@ -188,18 +215,22 @@ class NodeConnection:
     async def _handle(self, raw: str) -> None:
         """Decode one frame and forward it to the event sink."""
         try:
-            frame = json.loads(raw)
-        except json.JSONDecodeError:
+            frame = json.loads(raw, parse_constant=_reject_json_constant)
+        except (json.JSONDecodeError, ValueError):
             LOGGER.warning("node %s sent a malformed frame", self.node_id)
             return
         if not isinstance(frame, dict):
             return
-        self.last_frame_at = utcnow()
-        frame_type = str(frame.get("type", ""))
+        frame_type = frame.get("type")
+        if not isinstance(frame_type, str):
+            LOGGER.warning("node %s sent a frame without a valid type", self.node_id)
+            return
         try:
             event_type = NodeEventType(frame_type)
         except ValueError:
-            event_type = NodeEventType.PONG
+            LOGGER.warning("node %s sent an unknown frame type %s", self.node_id, frame_type)
+            return
+        self.last_frame_at = utcnow()
         data = frame.get("data")
         if not isinstance(data, dict):
             data = {
@@ -207,9 +238,19 @@ class NodeConnection:
                 for key, value in frame.items()
                 if key not in ("type", "ts")
             }
-        await self._emit(event_type, data)
+        try:
+            await self._emit(event_type, data)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - one bad event must not kill the channel
+            LOGGER.exception("node %s event handler failed: %s", self.node_id, exc)
 
     async def _emit(self, event_type: NodeEventType, data: dict[str, Any]) -> None:
         await self._on_event(
             NodeEvent(node_id=self.node_id, type=event_type, data=data, received_at=utcnow())
         )
+
+
+def _reject_json_constant(value: str) -> NoReturn:
+    """Reject Python-specific non-standard JSON numeric constants."""
+    raise ValueError(f"non-standard JSON constant: {value}")

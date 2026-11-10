@@ -1,12 +1,12 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.2.0 (alpha) · 169 passing tests · one broker, one fleet
+**Status:** v0.2.0 (alpha) · 700 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
 This document is the plan for how the Horizon Broker should be built from here.
-It is grounded in the code as it stands today (`horizon_broker/`, 31 modules,
-5 976 lines) and in a defect sweep of that code. Every work item below names
+It is grounded in the code as it stands today (`horizon_broker/`, 42 modules,
+7 479 lines) and in a defect sweep of that code. Every work item below names
 the file it touches. Every phase ends in a gate that can be measured, not
 asserted.
 
@@ -26,10 +26,10 @@ What is *not* real yet:
 | Claim in the docs | Reality |
 | --- | --- |
 | "a failed node is quarantined for `recovery.quarantine_seconds`" | **fixed** — the quarantine expires, placement honours it and the watchdog returns a recovered node to the fleet (`horizon_broker/routing/placement.py`, `horizon_broker/nodes/watchdog.py`) |
-| "the broker drains: in-flight jobs finish before exit" | still open — the drain ignores flex work and never awaits the per-job tasks (`horizon_broker/scheduler/engine.py`) |
+| "the broker drains: in-flight jobs finish before exit" | **fixed** — the drain covers both lanes, cancels work that exceeds the configured budget, publishes terminal cancellation, and closes shared clients only after active work is released (`horizon_broker/scheduler/engine.py`) |
 | "the queue is recoverable from the journal" | **fixed** — a cold start replays every non-terminal job from the journal (`horizon_broker/recovery/snapshot_store.py`, `horizon_broker/scheduler/engine.py`) |
-| "the broker batches work so the node amortises the weight load" | still open — the "batch" is N independent single-prompt HTTP requests (Phase 1.1) |
-| "covered by tests (85 of them)" | **fixed** — the README carries the real count (160) |
+| "the broker batches work so the node amortises the weight load" | **partially fixed** — opted-in agent containers receive one `batch_assign` frame with per-job lifecycle; direct Ollama nodes remain one independent request per prompt (Phase 1.1) |
+| "covered by tests (85 of them)" | **fixed** — the README carries the current count (700) |
 | `horizon_jobs_completed_total` | **fixed** — the counter moves, and every summary publishes p50/p95/p99 instead of a bare sum (`horizon_broker/observability/metrics.py`) |
 
 That gap between the documentation and the behaviour is the reason this
@@ -106,9 +106,9 @@ true. Building throughput on top of that would multiply the damage.
 
 Not the unit suite: a suite that kills nodes, cuts sockets, stops the ledger
 and asserts the *observable* outcome — the job completed on another node,
-the metric moved, the operator was told. It must include the three cases the
-current suite misses: a transient socket drop, a cancellation while a request
-is waiting, and a node that recovers after its quarantine expires.
+the metric moved, the operator was told. The current suite includes the three
+required cases: a transient socket drop, a cancellation while a request is
+waiting, and a node that recovers after its quarantine expires.
 
 **Evidence:** `make test` green, the fault-path suite green, the metrics
 diff showing the counters that now move, and the README corrected.
@@ -127,16 +127,16 @@ real work. Throughput is what makes the fleet worth owning.
 
 | # | Item | Where | Why it matters |
 | --- | --- | --- | --- |
-| 1.1 | Send a real batch to the engine | `scheduler/batcher.py:4`, `scheduler/engine.py:401` | today "batching" is a grouping that changes the order of N single-prompt requests; the MFU argument only holds if the weight load is amortised across one call |
+| 1.1 | Send a real batch to the engine | `scheduler/batcher.py`, `scheduler/engine.py`, `nodes/executor.py` | **partially done** — explicitly opted-in agent containers receive one `batch_assign` frame with per-job ids and recovery state; direct Ollama nodes remain one request per prompt until a native multi-prompt endpoint is available |
 | 1.2 | Stream token by token | `ingress/app.py`, `scheduler/engine.py`, `nodes/executor.py` | **done** — the supervisor publishes every piece of the answer as it arrives and the OpenAI ingress writes one delta per piece |
 | 1.3 | Honour `ollama.timeout_seconds` | `ollama/client.py` | **done** — the configured budget bounds the generation instead of `ClientTimeout(total=None)` |
-| 1.4 | One HTTP session for the whole broker | `scheduler/engine.py` | open — the connection manager, the probe and the Ollama clients each open their own pool |
+| 1.4 | One HTTP session for the whole broker | `scheduler/engine.py` | **done** — the broker-owned pool is shared by Ollama, probes, control channels and EdgeRecord; caller-supplied sessions remain caller-owned |
 | 1.5 | Wake the queue instead of polling it | `scheduler/engine.py`, `scheduler/priority_queue.py` | **done** — the lanes await the queue's wakeup event; the poll interval stays the fallback for time-based conditions |
 | 1.6 | Rebuild the queue from the journal after a restart | `recovery/snapshot_store.py`, `docs/RUNBOOK.md` | **done** — a cold start replays every non-terminal job |
 | 1.7 | Ship a real EdgeRecord adapter | `recovery/ledger.py` | open — the ledger port is a generic HTTP shim that accepts four different response shapes |
 | 1.8 | Make the OpenAI ingress agree with the native ingress | `ingress/openai.py`, `ingress/app.py` | **done** — both use `scheduling.interactive_latency_threshold_ms` |
 | 1.9 | Stop duplicating the system prompt | `ingress/openai.py` | **done** — the system message travels in `payload.system` only |
-| 1.10 | Enforce the per-node batch limit end to end | `nodes/registry.py:94` | `max_batch_size` is tracked per node but never consulted when a Flex batch is grouped |
+| 1.10 | Enforce the per-node batch limit end to end | `scheduler/batcher.py`, `nodes/registry.py` | **done** — planning splits routed groups at each node's remaining `batch_headroom`, preserves unroutable members for retry, and tests cover full and partially occupied nodes |
 
 **Gate B — measured evidence from a soak.**
 
@@ -166,10 +166,10 @@ limit is honest and documented; it is only dishonest if it is forgotten.
 | 2.1 | Elect a leader per fleet | new `control/` package | two brokers on one network currently both accept and run the same job id |
 | 2.2 | Move the queue out of process memory | new `control/` package | the job store is a dict in one process; a restart loses the queue until 1.6 lands |
 | 2.3 | Namespace job ids by broker and fleet | `contracts/jobs.py:193` | ids are bare UUIDs, so a broker cannot tell its own work from another broker's |
-| 2.4 | Lock the journal against two writers | `recovery/journal.py:33` | the journal is opened in append mode with no locking; two brokers interleave writes |
-| 2.5 | Filter the ledger query by broker | `recovery/ledger.py:146` | the query is `?job_id=…` with no owner, so two brokers read each other's snapshots |
+| 2.4 | Lock the journal against two writers | `recovery/journal.py` | **done** — a stable sidecar `flock` coordinates append, trim and read operations across broker processes |
+| 2.5 | Filter the ledger query by broker | `recovery/ledger.py:146` | **done** — an explicit `ledger.owner_id` scopes queries and adds a broker tag to committed recovery records |
 | 2.6 | Make the KV hand-off real, or delete it | `routing/pd_dag.py:85`, `nodes/executor.py:159` | the protocol is implemented and tested, but no engine can export a KV cache; either an engine appears or the split mode leaves the roadmap |
-| 2.7 | Track per-job tasks and await them on drain | `scheduler/engine.py:341`, `:200` | `SIGTERM` closes the Ollama clients while generation tasks may still be streaming |
+| 2.7 | Track per-job tasks and await them on drain | `scheduler/engine.py`, `nodes/executor.py` | **done** — a bounded drain lets active work finish, and a timeout cancels/reconciles every active execution before shared transport teardown |
 
 **Gate C — two brokers, one fleet, one job.**
 
@@ -238,7 +238,7 @@ node-loss sequence are generated from typed specifications in
 
 **Release hygiene.** The version in `pyproject.toml`, the tag, the compose
 image tag and the `entry_points.txt` artefact move together. `v0.2.0` is
-current; the compose file still says `0.1.0`.
+current, and the compose image tag is aligned with it.
 
 ---
 
@@ -293,7 +293,7 @@ errors, zero warnings) and published to the local dashboard at
 | Checkpoint dataflow | dataflow | `95476e56f1be4fa4b970e6d8f1070f27` | how a checkpoint becomes durable: journal first, ledger second |
 | Durable state | erd | `5d09bd154f6145e7bea2cc70a87fe8c7` | the documents the broker persists, with their keys and cardinalities |
 | Contract types | class | `7c1c430ce7c54c4f8c205b49e99547d3` | the wire-format types and how they relate |
-| Package tree | tree | `c3875856ce564c47956e5a8fa1493484` | the forty-one files of the package and what each one owns |
+| Package tree | tree | `c3875856ce564c47956e5a8fa1493484` | the forty-one functional modules of the package and what each one owns; package initializers are omitted |
 | Recovery budget | timeline | `7e4f3b1234ef45a18ead63df30d205e3` | when a node loss is detected, and when the work resumes |
 | Recovery timing | waterfall | `794c87e2c6a344f69f660287a4fb1b5e` | where the recovery time goes, by the documented budgets |
 | The plan, on one page | explainer | `b4a07e552f6b420d8627758853dd8f5d` | the conclusion first, then the phases, the comparison and the checklist |

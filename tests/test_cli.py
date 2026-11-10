@@ -4,10 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from horizon_broker.cli import run
+from horizon_broker.cli import (
+    _display_models,
+    _display_power,
+    _is_positive_finite_number,
+    build_parser,
+    run,
+)
 
 
 async def start_broker() -> tuple[TestServer, str]:
@@ -28,7 +35,18 @@ async def start_broker() -> tuple[TestServer, str]:
         return web.json_response({"job_id": request.match_info["job_id"], "cancelled": True})
 
     async def queue(request: web.Request) -> web.Response:
-        return web.json_response({"queue": {"interactive": 1, "flex": 2}})
+        return web.json_response(
+            {
+                "queue": {"interactive": 1, "flex": 2},
+                "batches": {
+                    "active_members": 2,
+                    "admitted": 3,
+                    "rejected": 1,
+                    "members_admitted": 6,
+                    "members_rejected": 2,
+                },
+            }
+        )
 
     async def job_list(request: web.Request) -> web.Response:
         return web.json_response(
@@ -102,8 +120,24 @@ async def test_the_client_submits_a_job(capsys) -> None:
             ]
         )
         assert code == 0
-        out = capsys.readouterr().out
+        captured = capsys.readouterr()
+        out = captured.out
         assert "job-1" in out
+    finally:
+        await server.close()
+
+
+async def test_the_queue_command_shows_batch_health(capsys) -> None:
+    server, url = await start_broker()
+    try:
+        code = await run(["--base-url", url, "queue"])
+        assert code == 0
+        captured = capsys.readouterr()
+        out = captured.out
+        assert "batch: active=2 admitted=3 rejected=1" in out
+        assert '"active_members": 2' in out
+        assert '"rejected": 1' in out
+        assert "warning: one or more batch admissions were rejected" in captured.err
     finally:
         await server.close()
 
@@ -185,6 +219,43 @@ async def test_the_client_reports_an_unknown_job(capsys) -> None:
         assert "unknown job" in capsys.readouterr().err
     finally:
         await server.close()
+
+
+def test_cli_rejects_non_finite_or_non_positive_timeouts() -> None:
+    parser = build_parser()
+
+    for value in ("0", "-1", "nan", "inf"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--timeout", value, "health"])
+
+
+@pytest.mark.parametrize(
+    "value", ["bad", float("nan"), float("inf"), 10**1000, True, False]
+)
+def test_cli_renders_invalid_power_telemetry_as_unknown(value: Any) -> None:
+    assert _display_power(value) == "-"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, "any"),
+        ("qwen2.5:7b", "any"),
+        (["qwen2.5:7b", 7], "qwen2.5:7b"),
+        ([" qwen2.5:7b", "   "], "any"),
+        (["qwen2.5:7b", "qwen2.5:7b"], "qwen2.5:7b"),
+    ],
+)
+def test_cli_renders_malformed_model_whitelists_safely(value: Any, expected: str) -> None:
+    assert _display_models(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(1, True), (0, False), (True, False), (float("nan"), False), (10**1000, False)],
+)
+def test_cli_recognizes_only_finite_positive_counters(value: Any, expected: bool) -> None:
+    assert _is_positive_finite_number(value) is expected
 
 
 async def test_the_submitted_body_carries_the_tier(capsys) -> None:
