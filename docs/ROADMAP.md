@@ -254,6 +254,18 @@ not a release.
 | The operator's attention is the scarcest resource | a multi-year plan becomes a multi-year queue | each phase is independently valuable: v0.3 makes the broker trustworthy, v0.4 makes it worth the hardware, v0.5 makes it grow |
 | Scope creep into a general job system | the broker becomes a platform instead of an edge broker | "Deliberate limits" stays; the three properties in section 2 are the filter for every new request |
 
+## 6a. Parked work
+
+One branch carries finished work that never landed:
+
+* **`f02/reliability-20261023`** — ten defect fixes written on 2026-10-23
+  (stale node events, recovery exclusions, queue expiry ordering, live
+  capacity for primary dispatch, draining nodes, stale resume state, split
+  capacity reservation) with about 900 lines of new tests. A trial merge
+  into `v0.3.0` produced 19 conflict hunks across the fault-critical core,
+  so it is parked rather than hand-merged into a released line. Issue #7
+  carries the commit-by-commit list and the landing recipe.
+
 ---
 
 ## 7. What is deliberately not planned
