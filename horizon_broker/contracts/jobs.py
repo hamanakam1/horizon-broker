@@ -62,6 +62,14 @@ class JobState(StrEnum):
     CANCELLED = "cancelled"
 
 
+TERMINAL_STATES = (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED)
+"""The states a job cannot leave.
+
+A terminal state is authoritative: a late failure or a late frame from a
+superseded execution must never rewrite it.
+"""
+
+
 class ExecutionPhase(StrEnum):
     """Phase of a (possibly split) execution.
 

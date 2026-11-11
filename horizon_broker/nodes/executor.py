@@ -27,7 +27,12 @@ from typing import Any
 
 from horizon_broker.config import RecoveryConfig
 from horizon_broker.contracts.errors import NoCapacityError
-from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState
+from horizon_broker.contracts.jobs import (
+    TERMINAL_STATES,
+    ExecutionPhase,
+    InferenceJob,
+    JobState,
+)
 from horizon_broker.contracts.nodes import ExecutionMode, NodeCapability, NodeHealth
 from horizon_broker.contracts.recovery import FaultRecoverySnapshot, PartialToken, ResumePoint
 from horizon_broker.nodes.connection import NodeEvent, NodeEventType
@@ -389,18 +394,20 @@ class JobSupervisor:
                     generation.close()
                     raise
         except Exception:
-            if (
+            stale_execution = (
                 self._contexts.get(context.job.job_id) is not context
                 or context.node_id != node_id
                 or context.phase is not phase
-            ):
-                # A send can finish after recovery, handoff or completion. Its
-                # old failure cannot invalidate the newer execution or answer.
+            )
+            if stale_execution and context.job.state not in TERMINAL_STATES:
+                # A send can finish after recovery or a prefill/decode handoff.
+                # Its old failure cannot invalidate the newer execution or
+                # answer, so it is dropped rather than reported as the
+                # current execution's failure.
                 return
-            # Failed startup must not retain a phantom owner that accepts late
-            # events or consumes a slot. Cancellation keeps its existing semantics.
-            self.registry.release_job(node_id, context.job.job_id)
-            self._contexts.pop(context.job.job_id, None)
+            # Otherwise the failure belongs to this execution: the caller
+            # rolls the ownership back and the error surfaces. Cancellation
+            # keeps its existing semantics.
             raise
 
     async def _run_ollama(self, context: ExecutionContext, node: NodeCapability) -> None:

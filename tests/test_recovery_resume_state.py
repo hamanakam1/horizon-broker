@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import replace
 from typing import Any
 
@@ -19,7 +20,10 @@ from tests.conftest import make_job, make_node
 
 @pytest.mark.parametrize(
     "snapshot_case",
-    ["missing", "prompt", "model", "resume_model", "job_id", "valid", "legacy_model"],
+    # "resume_model" and "legacy_model" are gone: the contract rejects an
+    # empty model and a resume point that disagrees with its snapshot, so
+    # those corruptions can no longer reach the coordinator.
+    ["missing", "prompt", "model", "job_id", "valid"],
 )
 async def test_replacement_node_receives_only_validated_resume_state_and_completes(
     config: BrokerConfig,
@@ -62,16 +66,28 @@ async def test_replacement_node_receives_only_validated_resume_state_and_complet
         ),
     )
     if snapshot_case == "prompt":
-        snapshot.resume_point.prompt_hash = "different-prompt-hash"
+        # A different - but perfectly valid - prompt hash. The contract
+        # accepts it; the job must not.
+        snapshot = snapshot.model_copy(
+            update={
+                "resume_point": snapshot.resume_point.model_copy(
+                    update={"prompt_hash": hashlib.sha256(b"another prompt").hexdigest()}
+                )
+            }
+        )
     elif snapshot_case == "model":
-        snapshot.model = "different-model"
-    elif snapshot_case == "resume_model":
-        snapshot.resume_point.model = "different-model"
+        # The snapshot describes another model, consistently with its own
+        # resume point: the contract allows it, the job must not accept it.
+        snapshot = snapshot.model_copy(
+            update={
+                "model": "other-model",
+                "resume_point": snapshot.resume_point.model_copy(
+                    update={"model": "other-model"}
+                ),
+            }
+        )
     elif snapshot_case == "job_id":
-        snapshot.job_id = "different-job"
-    elif snapshot_case == "legacy_model":
-        snapshot.model = ""
-        snapshot.resume_point.model = ""
+        snapshot = snapshot.model_copy(update={"job_id": "different-job"})
 
     async def latest_for_job(job_id: str) -> FaultRecoverySnapshot | None:
         assert job_id == job.job_id
@@ -106,7 +122,7 @@ async def test_replacement_node_receives_only_validated_resume_state_and_complet
         assert engine.registry.jobs_on(replacement_node_id) == ()
         assert job.attempt == 2
 
-        valid_snapshot = snapshot_case in {"valid", "legacy_model"}
+        valid_snapshot = snapshot_case == "valid"
         expected_resume = snapshot.resume_point.model_dump(mode="json") if valid_snapshot else None
         expected_cache = "latest-cache" if valid_snapshot else None
         assert replacement_frame["resume_point"] == expected_resume

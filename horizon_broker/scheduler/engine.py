@@ -35,7 +35,12 @@ from horizon_broker.contracts.errors import (
     QueueFullError,
     UnknownJobError,
 )
-from horizon_broker.contracts.jobs import ExecutionPhase, InferenceJob, JobState
+from horizon_broker.contracts.jobs import (
+    TERMINAL_STATES,
+    ExecutionPhase,
+    InferenceJob,
+    JobState,
+)
 from horizon_broker.contracts.nodes import NodeHealth, PowerClass
 from horizon_broker.contracts.recovery import utcnow
 from horizon_broker.nodes.executor import JobSupervisor
@@ -60,8 +65,6 @@ LOGGER = logging.getLogger(__name__)
 
 MAX_TRACKED_JOBS = 10_000
 """How many finished jobs stay queryable through the status endpoint."""
-
-TERMINAL_STATES = (JobState.COMPLETED, JobState.FAILED, JobState.CANCELLED)
 
 
 class BrokerEngine:
@@ -856,6 +859,11 @@ class BrokerEngine:
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
+            if job.state in TERMINAL_STATES:
+                # A terminal state is authoritative: a late failure from a
+                # superseded execution must not rewrite a finished answer.
+                LOGGER.warning("ignoring late failure of job %s: %s", job.job_id, exc)
+                return
             LOGGER.exception("job %s failed: %s", job.job_id, exc)
             job.state = JobState.FAILED
             job.error = str(exc)
