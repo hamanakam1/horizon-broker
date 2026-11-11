@@ -141,9 +141,9 @@ decode_bytes   = (2 * P / batch) * N + kv_bytes * N
 
 The split mode requires the engine to support KV-cache hand-off
 (`routing.kv_handoff_models`). The contract carries `kv_cache_state_id` and
-`InferenceJob.phase` for exactly this, but Ollama does not expose a KV-cache
-export endpoint yet — so the split is currently negotiated but not executed.
-The direct modes are fully live.
+`InferenceJob.phase` for this purpose. Agent containers with KV export can
+execute the two phases. Direct Ollama endpoints do not expose a KV-cache export
+endpoint, so a split involving one runs as a whole job on its primary node.
 
 ### The two-phase split, end to end
 
@@ -180,6 +180,19 @@ already known. A caller that retries after a timeout cannot double-execute.
 
 **Backpressure.** Above `scheduling.max_queue_depth` the ingress answers
 `429` instead of accepting work the fleet cannot absorb.
+
+**Primary-node capacity.** Flex planning accounts for each planned primary slot
+without changing the live registry. Dispatch refreshes placement immediately
+before assignment, so a stale plan cannot overbook a primary node. Overflow is
+deferred in the queue. Heartbeat updates preserve broker-owned assignments, and
+releasing one job does not erase other reported load.
+New and recovered placements exclude draining nodes in both scheduling lanes;
+that filter does not itself cancel work the node has already accepted.
+
+**Execution startup failures.** A failed agent assignment, decode handoff, or
+Ollama client setup reaches callers as a terminal failure and releases local
+ownership. An older assignment's late failure cannot invalidate a job that has
+already recovered, changed phase, completed, or been cancelled.
 
 **Draining.** On `SIGTERM` the broker stops accepting work (`503`), waits for
 the in-flight jobs up to `broker.drain_timeout_seconds`, then exits. Jobs
@@ -290,7 +303,8 @@ The interactive version of this map is published to the dashboard
   second broker on the same network would double-dispatch. The multi-broker
   story needs a leader election and a shared queue, which is out of scope
   here.
-* KV-cache hand-off between nodes is a contract without an engine behind it
-  yet.
+* Direct Ollama nodes cannot export a KV cache. Executable split handoff requires
+  agent containers on both nodes. A split reserves only its current primary
+  phase; capacity for the future decode handoff is not reserved or revalidated.
 * The broker assumes it is the only writer for a given job id. Job ids are
   UUIDs, so collisions are not a practical concern.

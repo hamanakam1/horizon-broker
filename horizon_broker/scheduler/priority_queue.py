@@ -171,14 +171,14 @@ class JobPriorityQueue:
                 job = entry.job
                 if job.job_id not in self._by_id:
                     continue
-                if job.not_before is not None and job.not_before.timestamp() > now:
-                    skipped.append(entry)
-                    continue
                 if job.deadline_at is not None and job.deadline_at.timestamp() <= now:
                     self._by_id.pop(job.job_id, None)
                     job.state = JobState.FAILED
                     job.error = "latency budget expired before dispatch"
                     self._expired.append(job)
+                    continue
+                if job.not_before is not None and job.not_before.timestamp() > now:
+                    skipped.append(entry)
                     continue
                 self._by_id.pop(job.job_id, None)
                 return job
@@ -197,9 +197,15 @@ class JobPriorityQueue:
     ) -> list[FlexBatch]:
         """Evaluate every open window and return the batches that should run.
 
-        Jobs that are not yet eligible (``not_before`` in the future) stay in
-        the queue.
+        Deadlines retire jobs even while power or ``not_before`` gates prevent
+        dispatch; those gates cannot extend the caller's latency budget.
         """
+        for job in self.pending_flex():
+            if job.deadline_at is not None and job.deadline_at.timestamp() <= now:
+                self._remove_locked(job.job_id)
+                job.state = JobState.FAILED
+                job.error = "latency budget expired before dispatch"
+                self._expired.append(job)
         if not power_ok:
             return []
         self._reindex_flex_models()

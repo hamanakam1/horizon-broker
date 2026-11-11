@@ -23,7 +23,7 @@ from horizon_broker.contracts.errors import (
     QueueFullError,
     UnknownJobError,
 )
-from horizon_broker.contracts.jobs import InferenceJob, PriorityTier
+from horizon_broker.contracts.jobs import TERMINAL_STATES, InferenceJob, PriorityTier
 from horizon_broker.contracts.nodes import NodeCapability
 from horizon_broker.ingress.openai import (
     DONE,
@@ -33,7 +33,7 @@ from horizon_broker.ingress.openai import (
     completion_object,
     sse,
 )
-from horizon_broker.scheduler.engine import TERMINAL_STATES, BrokerEngine
+from horizon_broker.scheduler.engine import BrokerEngine
 
 LOGGER = logging.getLogger(__name__)
 
