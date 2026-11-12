@@ -190,7 +190,11 @@ updated "Deliberate limits" section in `docs/ARCHITECTURE.md`.
 
 - A seven-day edge trial on the real fleet (M3 Max, Pi cluster, solar
   trailer) with the fault injection switched on: pull the power, kill the
-  network, overheat a node, let the sun go down.
+  network, overheat a node, let the sun go down. The trial is instrumented
+  and ready to run: [`docs/TRIAL.md`](TRIAL.md) holds the schedule, the
+  SLOs and the evidence, and `scripts/trial_harness.py` records the
+  broker, injects the faults and renders the SLO table. What is left is
+  the fleet, the week and the numbers.
 - The SLOs written down and measured: recovery within 30 s at p99, no lost
   job across the trial, no duplicate execution, the recovery budget respected.
 - The operator runbook rewritten from the drill: what the operator sees, what

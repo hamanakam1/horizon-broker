@@ -376,6 +376,7 @@ EDGERECORD_TOKEN=...        # the ledger token, read per request
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — directory tree, subsystem map, fault timeline
 * [`docs/CONTRACTS.md`](docs/CONTRACTS.md) — the data contracts and their JSON Schema
 * [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operating the broker when hardware dies
+* [`docs/TRIAL.md`](docs/TRIAL.md) — the seven-day fault trial: the schedule, the SLOs and the harness that measures them
 
 ### The plan in pictures
 

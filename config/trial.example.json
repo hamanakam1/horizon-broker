@@ -1,0 +1,20 @@
+{
+  "broker_url": "http://127.0.0.1:8791",
+  "nodes": [
+    {
+      "node_id": "m3-max",
+      "fault_command": ["ssh", "pi@pi-01", "sudo", "systemctl", "stop", "ollama"],
+      "restore_command": ["ssh", "pi@pi-01", "sudo", "systemctl", "start", "ollama"]
+    },
+    {
+      "node_id": "pi-01",
+      "fault_command": ["ssh", "pi@pi-01", "sudo", "systemctl", "stop", "ollama"],
+      "restore_command": ["ssh", "pi@pi-01", "sudo", "systemctl", "start", "ollama"]
+    },
+    {
+      "node_id": "trailer-01",
+      "fault_command": ["ssh", "trailer@trailer.local", "sudo", "shutdown", "-h", "now"],
+      "restore_command": ["ssh", "pi@trailer.local", "sudo", "systemctl", "start", "ollama"]
+    }
+  ]
+}
