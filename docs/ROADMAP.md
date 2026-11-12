@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.3.0 (alpha) · 799 passing tests · one broker, one fleet
+**Status:** v0.3.0 (alpha) · 798 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
