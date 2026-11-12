@@ -11,16 +11,21 @@ from horizon_broker.scheduler.batcher import BatchPlanner
 from tests.conftest import make_job, make_node
 
 
-def test_planner_splits_a_group_at_remaining_node_capacity() -> None:
+def test_planner_plans_only_what_the_node_can_take() -> None:
+    """A plan never books a node beyond its remaining capacity.
+
+    The excess stays in the queue and is planned against the live fleet
+    later. Planning it anyway produced a second batch that the supervisor
+    had to reject - the node was still full when it arrived.
+    """
     node = make_node("small-node", max_batch=3, current_batch=1)
     jobs = [make_job(tier=PriorityTier.FLEX, prompt=f"job-{index}") for index in range(4)]
 
     batches = BatchPlanner(PDDagRouter()).plan(jobs, [node])
 
-    assert [batch.size for batch in batches] == [2, 2]
+    assert [batch.size for batch in batches] == [2]
     assert [batch.job_ids() for batch in batches] == [
         (jobs[0].job_id, jobs[1].job_id),
-        (jobs[2].job_id, jobs[3].job_id),
     ]
 
 

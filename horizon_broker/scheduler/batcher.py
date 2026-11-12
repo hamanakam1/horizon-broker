@@ -50,11 +50,13 @@ class BatchPlanner:
     ) -> list[DispatchBatch]:
         """Route every job and group the ones that share a destination node."""
         grouped: dict[tuple[str, str], tuple[list[InferenceJob], list[RoutingDecision]]] = {}
-        # Planning projects the occupancy: every planned start consumes a slot,
-        # so the router sees the node it would actually face. The real fleet
-        # stays untouched, and dispatch re-checks the live state before it
-        # admits the job.
+        # Planning counts the slots it hands out. A node that runs out of room
+        # in this plan is marked full, so the router sends the rest elsewhere;
+        # a node that still has room is left exactly as it is, because a
+        # projected count would change the router's score and split batches
+        # that belong together. The real fleet is never touched.
         projected = {node.node_id: node for node in nodes}
+        planned: dict[str, int] = {}
         for job in jobs:
             job_excluded = excluded | (excluded_by_job or {}).get(job.job_id, frozenset())
             try:
@@ -62,15 +64,13 @@ class BatchPlanner:
             except NoCapacityError:
                 # Unroutable jobs stay in the queue; the engine reports them.
                 continue
-            planned_node = projected[decision.primary_node_id]
-            projected[planned_node.node_id] = planned_node.model_copy(
-                update={
-                    "current_batch_size": max(
-                        planned_node.current_batch_size, len(planned_node.assigned_job_ids)
-                    )
-                    + 1
-                }
-            )
+            target = projected[decision.primary_node_id]
+            planned[target.node_id] = planned.get(target.node_id, 0) + 1
+            if planned[target.node_id] >= target.batch_headroom:
+                # No room for another start in this plan.
+                projected[target.node_id] = target.model_copy(
+                    update={"current_batch_size": target.max_batch_size}
+                )
             # A batch shares the model-weight admission on the target node.
             # Keep this invariant in the planner as well as the supervisor so
             # stale or direct planner callers cannot manufacture a mixed-model
