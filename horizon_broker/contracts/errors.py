@@ -60,5 +60,9 @@ class BrokerDrainingError(BrokerError):
     """The broker is shutting down and is no longer accepting work."""
 
 
+class LeaseUnavailableError(BrokerError):
+    """Another broker owns the fleet: this one must not take work."""
+
+
 class InvalidSubmissionError(BrokerError):
     """A new submission carried a lifecycle state reserved for replay."""

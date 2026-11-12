@@ -377,6 +377,7 @@ EDGERECORD_TOKEN=...        # the ledger token, read per request
 * [`docs/CONTRACTS.md`](docs/CONTRACTS.md) — the data contracts and their JSON Schema
 * [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operating the broker when hardware dies
 * [`docs/TRIAL.md`](docs/TRIAL.md) — the seven-day fault trial: the schedule, the SLOs and the harness that measures them
+* [`docs/CONTROL-PLANE.md`](docs/CONTROL-PLANE.md) — the control plane: how one broker owns a fleet
 
 ### The plan in pictures
 
@@ -446,7 +447,7 @@ make schemas     # regenerate schemas/*.v1.json
 ## Status
 
 **v0.3.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests (779 of them).
+recovery paths are implemented and covered by tests (794 of them).
 
 This release is the "truth" release: the behaviour and the documentation now
 say the same thing. A node that failed once returns to the fleet when its
