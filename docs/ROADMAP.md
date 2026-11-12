@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.3.0 (alpha) · 778 passing tests · one broker, one fleet
+**Status:** v0.3.0 (alpha) · 779 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
@@ -127,7 +127,7 @@ real work. Throughput is what makes the fleet worth owning.
 
 | # | Item | Where | Why it matters |
 | --- | --- | --- | --- |
-| 1.1 | Send a real batch to the engine | `scheduler/batcher.py`, `scheduler/engine.py`, `nodes/executor.py` | **partially done** — explicitly opted-in agent containers receive one `batch_assign` frame with per-job ids and recovery state; direct Ollama nodes remain one request per prompt until a native multi-prompt endpoint is available |
+| 1.1 | Send a real batch to the engine | `scheduler/engine.py` | **done** — a direct Ollama node receives the batch as a wave: the jobs of one group are in flight together, so the engine amortises the weight load across them. Measured on a local Ollama 0.40.16: four prompts took 3.93 s one after another and 1.38 s as a wave (2.85x). Ollama has no multi-prompt endpoint - an array of requests is rejected - so overlap is where the amortisation happens |
 | 1.2 | Stream token by token | `ingress/app.py`, `scheduler/engine.py`, `nodes/executor.py` | **done** — the supervisor publishes every piece of the answer as it arrives and the OpenAI ingress writes one delta per piece |
 | 1.3 | Honour `ollama.timeout_seconds` | `ollama/client.py` | **done** — the configured budget bounds the generation instead of `ClientTimeout(total=None)` |
 | 1.4 | One HTTP session for the whole broker | `scheduler/engine.py` | **done** — the broker-owned pool is shared by Ollama, probes, control channels and EdgeRecord; caller-supplied sessions remain caller-owned |

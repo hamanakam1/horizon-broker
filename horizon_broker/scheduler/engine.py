@@ -829,8 +829,16 @@ class BrokerEngine:
                             self.queue.requeue_front(job, reason="batch-admission")
                             self.metrics.incr("horizon_jobs_deferred_total")
                     continue
-                for job, decision in zip(plan.jobs, plan.decisions, strict=True):
-                    await self._execute(job, decision)
+                # The batch is a wave, not a queue: the jobs of one group run
+                # at the same time so the engine amortises the weight load
+                # across them. Run one after another, the group buys the
+                # fleet nothing it would not also buy from single prompts.
+                await asyncio.gather(
+                    *(
+                        self._execute(job, decision)
+                        for job, decision in zip(plan.jobs, plan.decisions, strict=True)
+                    )
+                )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
