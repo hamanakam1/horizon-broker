@@ -445,7 +445,7 @@ make schemas     # regenerate schemas/*.v1.json
 ## Status
 
 **v0.3.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
-recovery paths are implemented and covered by tests (737 of them).
+recovery paths are implemented and covered by tests (746 of them).
 
 This release is the "truth" release: the behaviour and the documentation now
 say the same thing. A node that failed once returns to the fleet when its
