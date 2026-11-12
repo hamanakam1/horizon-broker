@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.3.0 (alpha) · 746 passing tests · one broker, one fleet
+**Status:** v0.3.0 (alpha) · 778 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
@@ -256,18 +256,12 @@ not a release.
 
 ## 6a. Parked work
 
-One branch carries finished work that has not landed:
-
-* **`f02/reliability-20261023`** — ten defect fixes written on 2026-10-23
-  (stale node events, recovery exclusions, queue expiry ordering, live
-  capacity for primary dispatch, draining nodes, stale resume state, split
-  capacity reservation) with about 900 lines of new tests. Nine of the ten
-  have landed: [PR #8](../pull/8) replayed the first eight one by one with the
-  branch's own tests as the arbiter, and [PR #9](../pull/9) landed the live
-  capacity model. The split-capacity half (reserving the decode slot through a
-  prefill/decode hand-off) is resolved and green against the branch's own
-  arbiter, with two assertions left to reconcile. Issue #7 carries the list
-  and the landing recipe.
+Nothing is parked. The branch `f02/reliability-20261023` carried ten defect
+fixes written on 2026-10-23 that were never landed; all ten are in `main`
+now — PR #8 (the first eight), PR #9 (the live capacity model) and PR #10 (the
+split capacity reserved through the assignment and the hand-off). The branch's
+own test suites were the arbiter throughout, and the capacity model they
+forced is the one the broker reasons about today.
 
 ---
 
