@@ -198,6 +198,8 @@ class BrokerEngine:
         )
         """The fleet lease, when the fleet is shared with other brokers."""
         self._is_leader = True
+        self.lease_renew_seconds = 2.0
+        """How often the lease is renewed and the fleet is re-contested."""
         self._jobs: dict[str, InferenceJob] = {}
         self._usage: dict[str, tuple[int, int]] = {}
         self._waiters: dict[str, set[asyncio.Future[str | None]]] = {}
@@ -267,6 +269,10 @@ class BrokerEngine:
             )
             self._tasks.append(self._create_task_safely(self.watchdog.run(), name="horizon-watchdog"))
             self._tasks.append(self._create_task_safely(self.probe.run(), name="horizon-probe"))
+            if self.lease is not None:
+                self._tasks.append(
+                    self._create_task_safely(self._lease_loop(), name="horizon-lease")
+                )
         except BaseException:
             await self.stop(drain=False)
             raise
@@ -751,6 +757,29 @@ class BrokerEngine:
             except Exception as exc:  # noqa: BLE001
                 LOGGER.exception("flex loop error: %s", exc)
                 await asyncio.sleep(self.config.scheduling.poll_interval_seconds)
+
+    async def _lease_loop(self) -> None:
+        """Keep the lease, and take it over when the owner dies.
+
+        The lease is released by the operating system when its holder dies,
+        so a follower only has to keep asking: the first one to get the lock
+        owns the fleet from then on. Nothing here trusts a timer.
+        """
+        while self._running:
+            try:
+                if self.lease is None:
+                    return
+                if self.lease.is_held:
+                    self.lease.renew()
+                elif self.lease.acquire():
+                    self._is_leader = True
+                    LOGGER.info("this broker took over the fleet")
+                await asyncio.sleep(self.lease_renew_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - the heartbeat must not die
+                LOGGER.warning("lease heartbeat failed: %s", exc)
+                await asyncio.sleep(self.lease_renew_seconds)
 
     async def _wait_for_work(self, timeout: float) -> None:
         """Wait until the queue raises its wakeup event, or the interval ends.

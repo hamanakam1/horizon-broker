@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -104,7 +105,11 @@ async def test_the_openai_ingress_refuses_a_follower_too(
 async def test_a_follower_takes_over_when_the_owner_stops(
     config: BrokerConfig, tmp_path: Path
 ) -> None:
-    """The owner releases the lease on shutdown, so the fleet is never stranded."""
+    """The owner releases the lease on shutdown, so the fleet is never stranded.
+
+    The takeover is not a timeout: the follower keeps asking, and the first
+    one to get the lock owns the fleet.
+    """
     lease = tmp_path / "fleet.lease"
     owner_client, owner = await make_client(
         replace(config, lease_path=str(lease), ledger=replace(config.ledger, owner_id="broker-a"))
@@ -118,9 +123,17 @@ async def test_a_follower_takes_over_when_the_owner_stops(
         assert follower.is_leader is False
 
         await owner.stop(drain=False)
-        # The follower notices at its next start; the lock itself is free.
-        assert follower.lease.acquire() is True
-        follower.lease.release()
+
+        # The follower's heartbeat takes the lease the moment it is free.
+        deadline = 10.0
+        waited = 0.0
+        while follower.is_leader is False and waited < deadline:
+            await asyncio.sleep(0.05)
+            waited += 0.05
+        assert follower.is_leader is True
+
+        response = await follower_client.post("/v1/jobs", json=job_body("job-after-takeover"))
+        assert response.status == 202
     finally:
         await follower.stop(drain=False)
         await owner_client.close()

@@ -54,7 +54,9 @@ A follower is not idle: it keeps its journal, its node registry and its
 probe running (so the fleet view is right everywhere), but it refuses
 admissions with `503 broker is a follower` until it owns the lease. This
 is implemented: `broker.lease_path` points a broker at the shared file,
-and the refusal names the owner.
+and the refusal names the owner. The lease is renewed on a heartbeat, and a
+follower keeps asking for it: the first one to get the lock owns the fleet
+from then on, so a dead owner is replaced without a timeout.
 
 ## What a follower does with a request
 
