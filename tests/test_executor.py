@@ -278,7 +278,10 @@ async def test_a_full_heartbeat_replaces_the_remote_occupancy_baseline(
 
     refreshed = engine.registry.get(node.node_id)
     assert refreshed is not None
-    assert refreshed.current_batch_size == 2
+    # The broker knows the job it just released is gone, so it corrects the
+    # node's report for it instead of waiting for the next heartbeat. The
+    # report still stands for the work the broker cannot account for.
+    assert refreshed.current_batch_size == 1
 
 
 async def test_a_malformed_progress_count_cannot_rewind_execution(config: Any) -> None:
