@@ -1,6 +1,6 @@
 # The Horizon Broker — long-term plan
 
-**Status:** v0.3.0 (alpha) · 794 passing tests · one broker, one fleet
+**Status:** v0.3.0 (alpha) · 798 passing tests · one broker, one fleet
 **Plan horizon:** v0.3 → v0.4 → v0.5 → v1.0
 **Owner:** the operator of the edge fleet (a Mac, a Pi cluster, a solar trailer)
 
@@ -163,7 +163,7 @@ limit is honest and documented; it is only dishonest if it is forgotten.
 
 | # | Item | Where | Why it matters |
 | --- | --- | --- | --- |
-| 2.1 | Elect a leader per fleet | `horizon_broker/control/lease.py` | **started** — the lease is built and tested: an advisory lock over a shared file, released by the operating system when the process dies, so a crashed broker cannot strand the fleet and a follower takes over without a timeout. The design is in [`docs/CONTROL-PLANE.md`](CONTROL-PLANE.md); the follower's refusal and the shared queue are next |
+| 2.1 | Elect a leader per fleet | `horizon_broker/control/lease.py`, `horizon_broker/ingress/app.py` | **done** - the lease is an advisory lock over a shared file, released by the operating system when the process dies, so a crashed broker cannot strand the fleet; the holder admits the work and the other refuses it with `503 broker is a follower`, naming the owner. The design is in [`docs/CONTROL-PLANE.md`](CONTROL-PLANE.md); the shared queue (the journal with per-job claims) is next |
 | 2.2 | Move the queue out of process memory | new `control/` package | the job store is a dict in one process; a restart loses the queue until 1.6 lands |
 | 2.3 | Namespace job ids by broker and fleet | `contracts/jobs.py:193` | ids are bare UUIDs, so a broker cannot tell its own work from another broker's |
 | 2.4 | Lock the journal against two writers | `recovery/journal.py` | **done** — a stable sidecar `flock` coordinates append, trim and read operations across broker processes |

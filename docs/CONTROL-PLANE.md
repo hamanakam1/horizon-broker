@@ -52,7 +52,9 @@ crash       the kernel releases the lock; nothing to clean up
 
 A follower is not idle: it keeps its journal, its node registry and its
 probe running (so the fleet view is right everywhere), but it refuses
-admissions with `503 broker is a follower` until it owns the lease.
+admissions with `503 broker is a follower` until it owns the lease. This
+is implemented: `broker.lease_path` points a broker at the shared file,
+and the refusal names the owner.
 
 ## What a follower does with a request
 
@@ -107,7 +109,7 @@ The phase gate is a test and a live drill:
 | Step | What | Gate |
 | --- | --- | --- |
 | 2.1a | the lease (built ✓) and the follower refusal | two-broker test |
-| 2.1b | the owner's id in the refusal and in `/v1/config` | operator can see who owns the fleet |
+| 2.1b | the follower's refusal (**done**) - a follower answers admissions with `503 broker is a follower` and names the owner; `/readyz` reports `follower` | operator can see who owns the fleet |
 | 2.2 | the journal as the shared queue, with per-job claims | a submission before a crash runs after it |
 | 2.3 | ~~namespaced ids~~ - already covered by the owner tag | - |
 | 2.4 | ~~journal locking~~ - shipped | - |
