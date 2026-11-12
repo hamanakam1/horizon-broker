@@ -23,7 +23,8 @@ class NodeRegistry:
     def __init__(self) -> None:
         self._nodes: dict[str, NodeCapability] = {}
         self._registered_at: dict[str, datetime] = {}
-        self._reported_batch_size: dict[str, int] = {}
+        self._reported_load: dict[str, int] = {}
+        self._reported_assignments: dict[str, int] = {}
 
     # -- registration -------------------------------------------------------
 
@@ -36,12 +37,11 @@ class NodeRegistry:
         """Register or update a node without confusing partial reports for occupancy.
 
         ``preserve_reported_batch_size`` is used only when a partial heartbeat
-        omits occupancy. A full capability report must leave it false so the
-        node's explicit remote baseline replaces the previous one.
+        omits occupancy: such a report says nothing about how busy the node
+        is, so the live occupancy stands. A full capability report is the
+        node's own count of the work it holds and is authoritative.
         """
         existing = self._nodes.get(capability.node_id)
-        if existing is None or not preserve_reported_batch_size:
-            self._reported_batch_size[capability.node_id] = capability.current_batch_size
         if existing is not None:
             # Announcements describe node state, but broker-owned assignments
             # are local authority. A heartbeat's default empty tuple must not
@@ -51,17 +51,34 @@ class NodeRegistry:
                 metadata["health_reason"] = existing.metadata["health_reason"]
             updates: dict[str, Any] = {
                 "assigned_job_ids": existing.assigned_job_ids,
-                "current_batch_size": max(
-                    capability.current_batch_size, len(existing.assigned_job_ids)
-                ),
                 # Health and quarantine are broker verdicts, not node claims.
                 "health": existing.health,
                 "quarantined_until": existing.quarantined_until,
                 "metadata": metadata,
             }
+            if preserve_reported_batch_size:
+                # The report says nothing about occupancy: keep the live count.
+                updates["current_batch_size"] = existing.current_batch_size
+            else:
+                # The node reports what it holds. Our own assignments are
+                # part of that report from now on, so the pending ones - the
+                # jobs placed since - are the only ones it may not know about.
+                self._reported_load[capability.node_id] = capability.current_batch_size
+                self._reported_assignments[capability.node_id] = len(
+                    existing.assigned_job_ids
+                )
+                updates["current_batch_size"] = self._occupancy(
+                    capability.node_id, len(existing.assigned_job_ids)
+                )
             if capability.last_heartbeat_at is None:
                 updates["last_heartbeat_at"] = existing.last_heartbeat_at
             capability = capability.model_copy(update=updates)
+        else:
+            self._reported_load[capability.node_id] = capability.current_batch_size
+            self._reported_assignments[capability.node_id] = 0
+        self._nodes[capability.node_id] = capability
+        self._registered_at.setdefault(capability.node_id, utcnow())
+        return capability
         self._nodes[capability.node_id] = capability
         self._registered_at.setdefault(capability.node_id, utcnow())
         return capability
@@ -70,7 +87,8 @@ class NodeRegistry:
         """Forget a node entirely."""
         self._nodes.pop(node_id, None)
         self._registered_at.pop(node_id, None)
-        self._reported_batch_size.pop(node_id, None)
+        self._reported_load.pop(node_id, None)
+        self._reported_assignments.pop(node_id, None)
 
     def get(self, node_id: str) -> NodeCapability | None:
         return self._nodes.get(node_id)
@@ -132,6 +150,19 @@ class NodeRegistry:
 
     # -- work accounting ----------------------------------------------------
 
+    def _occupancy(self, node_id: str, assigned_count: int) -> int:
+        """The live occupancy of a node.
+
+        It is the node's last reported load plus the jobs this broker placed
+        since that report (the node may not know about them yet), and never
+        less than the jobs this broker owns. The broker therefore never books
+        a node beyond what it can take, and a report corrects the count.
+        """
+        reported = self._reported_load.get(node_id, 0)
+        reported_assignments = self._reported_assignments.get(node_id, 0)
+        pending = max(0, assigned_count - reported_assignments)
+        return max(reported + pending, assigned_count)
+
     def assign_job(self, node_id: str, job_id: str) -> None:
         """Attach a job to a node."""
         node = self._nodes.get(node_id)
@@ -143,9 +174,10 @@ class NodeRegistry:
         self._nodes[node_id] = node.model_copy(
             update={
                 "assigned_job_ids": assigned,
-                "current_batch_size": max(
-                    self._reported_batch_size.get(node_id, 0), len(assigned)
-                ),
+                # The node's last report may not know about this broker's work
+                # yet, so the live occupancy grows with the assignment: the
+                # broker must never book a node beyond what it can take.
+                "current_batch_size": self._occupancy(node_id, len(assigned)),
             }
         )
 
@@ -160,9 +192,11 @@ class NodeRegistry:
         self._nodes[node_id] = node.model_copy(
             update={
                 "assigned_job_ids": assigned,
-                "current_batch_size": max(
-                    self._reported_batch_size.get(node_id, 0), len(assigned)
-                ),
+                # The slot this job held is freed, but never below the jobs
+                # this broker still owns: a late or duplicate release must not
+                # erase occupancy that belongs to the node or to another
+                # broker's work.
+                "current_batch_size": self._occupancy(node_id, len(assigned)),
             }
         )
 
