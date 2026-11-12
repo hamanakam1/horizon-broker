@@ -43,6 +43,7 @@ from horizon_broker.contracts.jobs import (
 )
 from horizon_broker.contracts.nodes import NodeHealth, PowerClass
 from horizon_broker.contracts.recovery import utcnow
+from horizon_broker.control.lease import FleetLease
 from horizon_broker.nodes.executor import JobSupervisor
 from horizon_broker.nodes.manager import NodeConnectionManager
 from horizon_broker.nodes.probe import NodeHealthProbe
@@ -190,6 +191,13 @@ class BrokerEngine:
             on_node_draining=self._on_node_draining,
         )
 
+        self.lease = (
+            FleetLease(config.lease_path, owner_id=config.ledger.owner_id)
+            if config.lease_path
+            else None
+        )
+        """The fleet lease, when the fleet is shared with other brokers."""
+        self._is_leader = True
         self._jobs: dict[str, InferenceJob] = {}
         self._usage: dict[str, tuple[int, int]] = {}
         self._waiters: dict[str, set[asyncio.Future[str | None]]] = {}
@@ -226,6 +234,13 @@ class BrokerEngine:
         """Start the scheduler loops, the connection manager and the watchdog."""
         if self._running:
             return
+        if self.lease is not None:
+            self._is_leader = self.lease.acquire()
+            if not self._is_leader:
+                LOGGER.warning(
+                    "this broker is a follower: %s owns the fleet",
+                    self.lease.holder() or "another broker",
+                )
         if self._session is None:
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.config.ollama.timeout_seconds)
@@ -317,6 +332,9 @@ class BrokerEngine:
                     LOGGER.exception("could not close broker HTTP session: %s", exc)
                 finally:
                     self._session = None
+            if self.lease is not None:
+                self.lease.release()
+                self._is_leader = True
             LOGGER.info("horizon broker stopped")
 
     async def drain(self, timeout: float) -> bool:
@@ -546,6 +564,18 @@ class BrokerEngine:
                 previous_state,
             )
         return restored
+
+    @property
+    def is_leader(self) -> bool:
+        """True when this broker owns the fleet and may admit work."""
+        return self._is_leader
+
+    @property
+    def lease_holder(self) -> str | None:
+        """The broker that owns the fleet, when the fleet is shared."""
+        if self.lease is None:
+            return None
+        return self.lease.holder()
 
     def token_usage(self, job_id: str) -> tuple[int, int] | None:
         """The measured (prompt, completion) token counts of a finished job."""

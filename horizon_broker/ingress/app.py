@@ -85,6 +85,22 @@ def _job_list_limit(raw: str) -> int:
     return min(parsed, MAX_JOB_LIST_LIMIT)
 
 
+def _follower_refusal(engine: BrokerEngine) -> web.Response | None:
+    """The refusal a follower answers an admission with.
+
+    A broker that does not own the fleet must not admit work: two brokers
+    accepting the same job id is exactly the failure the lease exists to
+    prevent. The fleet view stays open - a follower still knows what the
+    mesh looks like.
+    """
+    if engine.is_leader:
+        return None
+    return JSON(
+        {"error": "broker is a follower", "leader": engine.lease_holder},
+        status=503,
+    )
+
+
 def job_from_payload(data: dict[str, Any], config: BrokerConfig) -> InferenceJob:
     """Build an :class:`InferenceJob` from an ingress body.
 
@@ -111,6 +127,9 @@ async def handle_submit(request: web.Request) -> web.Response:
     """``POST /v1/jobs`` -- accept work."""
     engine = _engine(request)
     config = _config(request)
+    refusal = _follower_refusal(engine)
+    if refusal is not None:
+        return refusal
     try:
         data = await _request_json(request)
     except Exception:  # noqa: BLE001
@@ -251,6 +270,17 @@ async def handle_chat_completions(request: web.Request) -> web.StreamResponse:
         return JSON({"error": {"message": "body must be valid JSON"}}, status=400)
     if not isinstance(body, dict):
         return JSON({"error": {"message": "body must be a JSON object"}}, status=400)
+    if not engine.is_leader:
+        return JSON(
+            {
+                "error": {
+                    "message": "broker is a follower",
+                    "type": "not_leader",
+                    "leader": engine.lease_holder,
+                }
+            },
+            status=503,
+        )
     try:
         job = chat_request_to_job(
             body,
@@ -399,11 +429,22 @@ async def handle_readyz(request: web.Request) -> web.Response:
     healthy = len(engine.registry.healthy_nodes())
     stats = engine.stats()
     draining = bool(stats.get("draining"))
-    ready = healthy > 0 and not draining
+    leader = engine.is_leader
+    ready = healthy > 0 and not draining and leader
+    if not leader:
+        status = "follower"
+    elif draining:
+        status = "draining"
+    elif healthy == 0:
+        status = "degraded"
+    else:
+        status = "ready"
     body = {
-        "status": "ready" if ready else ("draining" if draining else "degraded"),
+        "status": status,
         "healthy_nodes": healthy,
         "draining": draining,
+        "leader": leader,
+        "lease_holder": engine.lease_holder,
     }
     return JSON(body, status=200 if ready else 503)
 

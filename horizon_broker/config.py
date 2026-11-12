@@ -185,6 +185,14 @@ class BrokerConfig:
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
     journal_path: str = "./var/horizon-broker/journal.jsonl"
+    lease_path: str = ""
+    """The shared lease file that says who owns the fleet.
+
+    Empty means this broker owns its fleet unconditionally, which is the
+    single-broker case. Two brokers that share a fleet point this at the
+    same file on a filesystem with real lock semantics; the one that holds
+    the lock admits the work and the other refuses it.
+    """
     journal_max_bytes: int = 64 * 1024 * 1024
     """The local journal is trimmed back to this size when it grows past it."""
     static_nodes: tuple[NodeCapability, ...] = ()

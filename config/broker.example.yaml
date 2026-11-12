@@ -7,6 +7,11 @@
 #   HORIZON_BROKER_WINDOW_SECONDS, ...
 
 broker:
+  # Two brokers that share a fleet point this at the same file, on a
+  # filesystem with real lock semantics. The holder owns the fleet and
+  # admits the work; the other refuses it. Empty means one broker owns its
+  # fleet unconditionally.
+  lease_path: ""
   host: 127.0.0.1
   port: 8791
   log_level: INFO
