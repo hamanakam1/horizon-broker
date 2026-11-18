@@ -146,8 +146,8 @@ python -m horizon_broker serve --config config/broker.yaml
 A published image is built and smoke-tested on every release tag.
 
 ```sh
-docker pull ghcr.io/hamanakam1/horizon-broker:0.3.0
-docker run --rm -p 8791:8791 ghcr.io/hamanakam1/horizon-broker:0.3.0
+docker pull ghcr.io/hamanakam1/horizon-broker:0.4.0
+docker run --rm -p 8791:8791 ghcr.io/hamanakam1/horizon-broker:0.4.0
 ```
 
 The image runs as a non-root user and keeps its journal on
@@ -447,29 +447,32 @@ make schemas     # regenerate schemas/*.v1.json
 
 ## Status
 
-**v0.3.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
+**v0.4.0 — alpha.** The scheduler, router, heartbeat, checkpointing and
 recovery paths are implemented and covered by tests (798 of them).
 
-This release is the "truth" release: the behaviour and the documentation now
-say the same thing. A node that failed once returns to the fleet when its
-quarantine expires, a cancelled or expired job answers its caller instead of
-hanging it, the completion counters move, every summary publishes p50/p95/p99,
-and the queue is rebuilt from the journal when the broker restarts.
+This release is the control-plane release: two brokers can share a fleet
+without double-dispatching. The holder of a lease over a shared file owns
+the fleet and admits the work; the other refuses it with `503 broker is a
+follower` and names the owner, then takes over automatically when the owner
+dies. The shared queue is the journal: a broker that crashes does not take
+the queue with it, because the next broker claims the unclaimed work from
+disk. The journal is locked against concurrent writers, and the ledger
+queries are scoped by broker owner.
 
-The prefill/decode split runs end to end for engines that can export a KV cache
-(enable them in `routing.kv_handoff_models`); Ollama cannot, so the broker
-degrades a split to a whole-job run and says so in the log and the
-`horizon_splits_degraded_total` metric.
+The prefill/decode split runs end to end for engines that can export a KV
+cache (enable them in `routing.kv_handoff_models`); Ollama cannot, so the
+broker degrades a split to a whole-job run and says so in the log and the
+`horizon_splits_degraded_total` metric. A Flex batch now reaches the engine
+as a wave: the jobs of one group run at the same time, so the engine
+amortises the weight load across them (2.85x measured on a local Ollama).
 
-Not done yet: multi-broker coordination (one broker owns one fleet) and a real
-batched request to a direct Ollama node (the EdgeRecord port is now pinned to
-its documented envelope and exercised through a fake in the test suite).
+Not done yet: multi-broker coordination beyond one owner (Phase 2.6 - the KV
+hand-off, and Phase 2.3's namespace for job ids, which the owner tag already
+covers), and the seven-day fault trial that needs the real fleet.
 
 The long-term plan — what the software becomes, in which order, and what each
 phase has to prove before it is allowed to ship — is in
-[`docs/ROADMAP.md`](docs/ROADMAP.md). The first phase is not a feature: it
-closes the defects that make the broker's behaviour and its documentation
-disagree.
+[`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## License
 
