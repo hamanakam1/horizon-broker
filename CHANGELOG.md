@@ -51,6 +51,52 @@ double-dispatching. 799 tests pass.
 - The KV hand-off stays an opt-in protocol that no shipped engine enables.
 - The seven-day fault trial needs the real fleet.
 
+## [0.4.0] — 2026-11-12
+
+The control-plane release: two brokers can share a fleet without
+double-dispatching. 799 tests pass.
+
+### Added
+
+- **The fleet lease** (`horizon_broker/control/lease.py`): an advisory lock
+  over a shared file. The operating system releases it when the process
+  dies, so a crashed broker cannot strand the fleet and a follower takes
+  over without a timeout. The owner is written into the file, so an
+  operator can see who owns the fleet without asking a running process.
+- **The follower's refusal**: a broker that does not own the fleet answers
+  an admission with `503 broker is a follower` and names the owner. The fleet
+  view stays open on a follower. `/readyz` reports `follower`.
+- **Automatic takeover**: a follower keeps asking for the lease, and the
+  first one to get it owns the fleet from then on.
+- **The shared queue is claimed from the journal**: a broker that owns the
+  fleet takes the unclaimed jobs from the journal and records that it is
+  running them, so a broker that dies does not take the queue with it.
+- **The live two-broker drill** (`scripts/two_broker_drill.py`): two real
+  brokers, one lease, one submission each. The owner admits, the follower
+  refuses, and the follower takes over when the owner stops.
+- `docs/CONTROL-PLANE.md` — the design for the rest of Phase 2.
+
+### Changed
+
+- `broker.lease_path` points a broker at the shared lease file; empty
+  means one broker owns its fleet unconditionally (the single-broker
+  case is unchanged).
+- `HORIZON_BROKER_LEASE_PATH` sets the lease path from the environment.
+- The broker's own jobs are counted as live occupancy, so the broker
+  never books a node beyond what it can take; the node's report corrects
+  the count, and a job the broker knows is finished reduces it.
+- A Flex batch reaches the engine as a wave (2.85x measured on a local
+  Ollama), not one prompt after another.
+- The planner books a node only as far as it can take; the rest stays in
+  the queue, and a stale plan is refreshed at dispatch time.
+
+### Known limits
+
+- The shared queue is the journal plus claims; a real out-of-process queue
+  is still Phase 2's next step.
+- The KV hand-off stays an opt-in protocol that no shipped engine enables.
+- The seven-day fault trial needs the real fleet.
+
 ## [0.3.0] — 2026-11-10
 
 The "truth" release: the behaviour and the documentation say the same thing.
