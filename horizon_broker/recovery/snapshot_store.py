@@ -25,7 +25,7 @@ from horizon_broker.config import LedgerConfig
 from horizon_broker.contracts.errors import LedgerUnavailableError
 from horizon_broker.contracts.jobs import InferenceJob
 from horizon_broker.contracts.ledger import LedgerCommitReceipt, LedgerRecord
-from horizon_broker.contracts.recovery import FaultRecoverySnapshot
+from horizon_broker.contracts.recovery import FaultRecoverySnapshot, utcnow
 from horizon_broker.observability.metrics import MetricsRegistry
 from horizon_broker.recovery.journal import LocalJournal
 from horizon_broker.recovery.ledger import EdgeRecordClient
@@ -34,6 +34,7 @@ LOGGER = logging.getLogger(__name__)
 
 SNAPSHOT_KIND = "snapshot"
 JOB_KIND = "job_payload"
+CLAIM_KIND = "job_claim"
 TRIM_EVERY = 200
 """How many commits pass between two journal trims."""
 
@@ -214,6 +215,55 @@ class SnapshotStore:
             LOGGER.warning("ignoring journal payload with mismatched job id for %s", job_id)
             return None
         return job
+
+    async def claim_job(self, job_id: str, owner_id: str) -> bool:
+        """Claim a job for this broker. Returns True when the claim is ours.
+
+        A job that is already claimed by another broker is not taken over:
+        the claim is a short-lived lease on the job, and the holder is the
+        one that runs it. A broker that dies leaves the claim on disk, and
+        the next broker takes it over once the lease is held.
+        """
+        records = await self.journal.read_all(CLAIM_KIND)
+        for record in reversed(records):
+            if record.get("job_id") == job_id:
+                holder = record.get("owner")
+                if isinstance(holder, str) and holder != owner_id:
+                    return False
+                break
+        await self.journal.append(
+            CLAIM_KIND,
+            {"job_id": job_id, "owner": owner_id, "claimed_at": utcnow().isoformat()},
+        )
+        return True
+
+    async def unclaimed_jobs(self, owner_id: str) -> list[InferenceJob]:
+        """The jobs this broker should take: submitted, not claimed by another."""
+        claimed: set[str] = set()
+        for record in await self.journal.read_all(CLAIM_KIND):
+            job_id = record.get("job_id")
+            owner = record.get("owner")
+            if isinstance(job_id, str) and isinstance(owner, str) and owner != owner_id:
+                claimed.add(job_id)
+        jobs: list[InferenceJob] = []
+        seen: set[str] = set()
+        for record in await self.journal.read_all(JOB_KIND):
+            job_id = record.get("job_id")
+            if not isinstance(job_id, str) or job_id in seen:
+                continue
+            if job_id in claimed:
+                continue
+            seen.add(job_id)
+            body = record.get("job")
+            if not isinstance(body, dict):
+                continue
+            try:
+                job = InferenceJob.model_validate(body)
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("ignoring corrupt journal payload for job %s: %s", job_id, exc)
+                continue
+            jobs.append(job)
+        return jobs
 
     @staticmethod
     def _snapshot_from_record(record: LedgerRecord) -> FaultRecoverySnapshot | None:

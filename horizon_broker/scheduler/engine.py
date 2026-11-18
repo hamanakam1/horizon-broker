@@ -259,6 +259,8 @@ class BrokerEngine:
         self._draining = False
         try:
             restored = await self._replay_journal()
+            if self.is_leader:
+                await self._claim_unclaimed_jobs()
             self._tasks = []
             self._tasks.append(
                 self._create_task_safely(self._interactive_loop(), name="horizon-interactive")
@@ -521,6 +523,24 @@ class BrokerEngine:
         except Exception as exc:  # noqa: BLE001 - journalling must not break a finish
             LOGGER.warning("could not journal job %s state: %s", job.job_id, exc)
 
+    async def _claim_unclaimed_jobs(self) -> None:
+        """Claim the work that no broker has taken yet.
+
+        The shared queue is the journal: every submission is on disk, and a
+        claim is the assertion that one broker is running it. The follower
+        that becomes the leader finds the unclaimed jobs here and starts
+        them, so a broker that dies does not take the queue with it.
+        """
+        if self.lease is None:
+            return
+        owner_id = self.config.ledger.owner_id
+        jobs = await self.store.unclaimed_jobs(owner_id)
+        for job in jobs:
+            if await self.store.claim_job(job.job_id, owner_id):
+                self._jobs[job.job_id] = job
+                self.queue.submit(job)
+                LOGGER.info("claimed unclaimed job %s from the journal", job.job_id)
+
     async def _replay_journal(self) -> int:
         """Re-queue the jobs a previous process left non-terminal.
 
@@ -774,6 +794,7 @@ class BrokerEngine:
                 elif self.lease.acquire():
                     self._is_leader = True
                     LOGGER.info("this broker took over the fleet")
+                    await self._claim_unclaimed_jobs()
                 await asyncio.sleep(self.lease_renew_seconds)
             except asyncio.CancelledError:
                 raise
