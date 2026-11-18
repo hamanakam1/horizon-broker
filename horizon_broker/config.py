@@ -455,6 +455,7 @@ def _apply_env_overrides(config: BrokerConfig) -> BrokerConfig:
         "PORT": ("port", config.port),
         "LOG_LEVEL": ("log_level", config.log_level),
         "JOURNAL_PATH": ("journal_path", config.journal_path),
+        "LEASE_PATH": ("lease_path", config.lease_path),
         "OLLAMA_BASE_URL": ("ollama", config.ollama),
         "LEDGER_BASE_URL": ("ledger", config.ledger),
         "LEDGER_OWNER_ID": ("ledger_owner_id", config.ledger),

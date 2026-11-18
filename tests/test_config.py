@@ -173,6 +173,13 @@ def test_an_invalid_boolean_environment_override_is_rejected(monkeypatch) -> Non
         load_config(None)
 
 
+def test_the_lease_path_can_be_set_from_the_environment(monkeypatch) -> None:
+    """Two brokers sharing a fleet are pointed at one lease file."""
+    monkeypatch.setenv("HORIZON_BROKER_LEASE_PATH", "/shared/fleet.lease")
+    config = load_config(None)
+    assert config.lease_path == "/shared/fleet.lease"
+
+
 def test_a_config_with_a_drain_timeout_loads(tmp_path: Path) -> None:
     path = write_config(tmp_path, "broker:\n  drain_timeout_seconds: 5\n")
     config = load_config(path)

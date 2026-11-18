@@ -378,6 +378,7 @@ EDGERECORD_TOKEN=...        # the ledger token, read per request
 * [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — operating the broker when hardware dies
 * [`docs/TRIAL.md`](docs/TRIAL.md) — the seven-day fault trial: the schedule, the SLOs and the harness that measures them
 * [`docs/CONTROL-PLANE.md`](docs/CONTROL-PLANE.md) — the control plane: how one broker owns a fleet
+* [`scripts/two_broker_drill.py`](scripts/two_broker_drill.py) — the live two-broker drill: one broker owns the fleet, the other refuses it, and the follower takes over when the owner stops
 
 ### The plan in pictures
 
